@@ -112,7 +112,7 @@ class Renderer:
         self.events = [(T.as_day(d), txt) for d, txt in T.EVENTS]
         self.markers = [(txt, *self.fr.px(lo, la), T.as_day(a), T.as_day(b) + 1) for txt, lo, la, a, b in T.MARKERS]
         # half-resolution twin used to work out how recently each pixel changed hands
-        self.lo = None if lite else Renderer(W // 2, H // 2, lite=True)
+        self.lo = None if lite else Renderer(min(W // 2, 960), min(H // 2, 540), lite=True)
 
     # -- helpers -------------------------------------------------------------------------------
     def font(self, name, size):
@@ -287,44 +287,63 @@ class Renderer:
         if not light.any():
             return None
         light = ndimage.gaussian_filter(light, 0.6)
-        return np.asarray(Image.fromarray(light).resize((self.W, self.H), Image.BILINEAR), np.float32) * self.land
+        ys, xs = np.nonzero(light > 0.01)
+        if len(ys) == 0:
+            return None
+        # upscale only the part of the map that changed hands recently
+        fx, fy = self.W / lo.W, self.H / lo.H
+        lx0, ly0, lx1, ly1 = max(0, xs.min() - 2), max(0, ys.min() - 2), xs.max() + 3, ys.max() + 3
+        x0, y0 = int(lx0 * fx), int(ly0 * fy)
+        x1, y1 = min(self.W, int(lx1 * fx)), min(self.H, int(ly1 * fy))
+        crop = Image.fromarray(light[ly0:ly1, lx0:lx1]).resize((x1 - x0, y1 - y0), Image.BILINEAR)
+        return np.asarray(crop, np.float32) * self.land[y0:y1, x0:x1], (x0, y0, x1, y1)
+
+    def _static_overlay(self):
+        """Railways then pink borders, folded into one multiply/add pair (computed once)."""
+        if not hasattr(self, "_ov_mul"):
+            kr = self.rail[..., None] * np.float32(0.42)
+            kb = self.border[..., None] * np.float32(0.55)
+            self._ov_mul = ((1 - kr) * (1 - kb)).astype(np.float32)
+            self._ov_add = (np.float32(0.12) * kr * (1 - kb)
+                            + np.array([0.86, 0.45, 0.5], np.float32) * kb).astype(np.float32)
+        return self._ov_mul, self._ov_add
 
     def map_layer(self, day):
         W, H = self.W, self.H
         lut_c, lut_a, lut_f = self.alliance_luts(day)
-        col = lut_c[self.ids]
-        a = lut_a[self.ids] * self.land
-        fac = lut_f[self.ids]
-
+        # one palette index per pixel: country ids for home territory, 200+code for occupied land
+        idx = self.ids.copy()
+        pal_c, pal_a, pal_f = lut_c.copy(), lut_a.copy(), lut_f.copy()
+        for occ, (c, al) in T.FACTIONS.items():
+            k = 200 + self.fac_code[occ]
+            pal_c[k], pal_a[k], pal_f[k] = np.array(c, np.float32) / 255, al, self.fac_code[occ]
         for m, occ, (x0, y0, x1, y1) in self.zones(day, set_line=True):
-            c = np.array(T.FACTIONS[occ][0], np.float32) / 255
-            al = T.FACTIONS[occ][1]
-            sl = (slice(y0, y1), slice(x0, x1))
-            col[sl] = col[sl] * (1 - m[..., None]) + c * m[..., None]
-            a[sl] = a[sl] * (1 - m) + al * m
-            fac[sl] = np.where(m > 0.5, self.fac_code[occ], fac[sl])
-
-        out = self.base * (1 - a[..., None]) + col * a[..., None]
+            sub = idx[y0:y1, x0:x1]
+            sub[m > 0.5] = 200 + self.fac_code[occ]
+        a = pal_a[idx][..., None]
+        out = self.base + (pal_c[idx] - self.base) * a
         if self.lo is not None:
-            lt = self.capture_light(day, lut_f)
-            if lt is not None:  # freshly captured land: whitish, fading into the occupier's colour
+            got = self.capture_light(day, lut_f)
+            if got is not None:  # freshly captured land: whitish, fading into the occupier's colour
+                lt, (x0, y0, x1, y1) = got
                 k = (0.8 * lt)[..., None]
-                out = out * (1 - k) + np.float32(0.96) * k
-        # railways: thin dark lines, like the reference maps
-        rl = self.rail[..., None] * 0.42
-        out = out * (1 - rl) + np.float32(0.12) * rl
-        # borders (pink, like old atlas maps)
-        b = self.border[..., None] * 0.55
-        out = out * (1 - b) + np.array([0.86, 0.45, 0.5], np.float32) * b
-        # light outline where two warring factions meet
+                sl = (slice(y0, y1), slice(x0, x1))
+                out[sl] = out[sl] * (1 - k) + np.float32(0.96) * k
+        mul, add = self._static_overlay()
+        out *= mul
+        out += add
+        # light outline where two warring factions meet (only touches the outline pixels)
+        fac = pal_f[idx]
         e = np.zeros((H, W), bool)
-        dx = (fac[:, 1:] != fac[:, :-1]) & (fac[:, 1:] > 0) & (fac[:, :-1] > 0)
-        dy = (fac[1:, :] != fac[:-1, :]) & (fac[1:, :] > 0) & (fac[:-1, :] > 0)
-        e[:, 1:] |= dx
-        e[1:, :] |= dy
-        ef = ndimage.uniform_filter(e.astype(np.float32), 2) * self.land
-        out = out * (1 - 0.45 * ef[..., None]) + 0.97 * 0.45 * ef[..., None]
-        return (np.clip(out, 0, 1) * 255).astype(np.uint8)
+        e[:, 1:] |= (fac[:, 1:] != fac[:, :-1]) & (fac[:, 1:] > 0) & (fac[:, :-1] > 0)
+        e[1:, :] |= (fac[1:, :] != fac[:-1, :]) & (fac[1:, :] > 0) & (fac[:-1, :] > 0)
+        if self.s > 2:  # keep the outline visible at 4K
+            e = ndimage.binary_dilation(e)
+        ys, xs = np.nonzero(e)
+        k = np.float32(0.4) * self.land[ys, xs][:, None]
+        out[ys, xs] = out[ys, xs] * (1 - k) + np.float32(0.97) * k
+        np.clip(out, 0, 1, out=out)
+        return (out * 255).astype(np.uint8)
 
     # -- overlays -------------------------------------------------------------------------------
     def army_value(self, lab, day):
@@ -340,13 +359,13 @@ class Renderer:
     def draw_rotated_text(self, img, text, cx, cy, angle, size, alpha=1.0):
         """White number with a soft drop shadow, rotated to follow the front."""
         s = self.s
-        f = self.font("OpenSans-Bold.ttf", size)
+        f = self.font("LiberationSans-Bold.ttf", size)
         bb = f.getbbox(text)
         pad = int(6 * s)
         w, h = bb[2] - bb[0] + 2 * pad, bb[3] - bb[1] + 2 * pad
         sh = Image.new("L", (w, h), 0)
-        ImageDraw.Draw(sh).text((pad - bb[0] + s, pad - bb[1] + s), text, font=f, fill=int(200 * alpha))
-        sh = sh.filter(ImageFilter.GaussianBlur(1.6 * s))
+        ImageDraw.Draw(sh).text((pad - bb[0] + s, pad - bb[1] + s), text, font=f, fill=int(170 * alpha))
+        sh = sh.filter(ImageFilter.GaussianBlur(1.1 * s))
         t = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         t.putalpha(sh)
         t = Image.alpha_composite(Image.new("RGBA", (w, h), (0, 0, 0, 0)),
@@ -378,7 +397,7 @@ class Renderer:
                     continue
                 p1, ang = self.label_pose(fr, lab, day)
                 txt = f"{v:,}".replace(",", ".")
-                self.draw_rotated_text(img, txt, p1[0], p1[1], ang, 16 * s, alpha)
+                self.draw_rotated_text(img, txt, p1[0], p1[1], ang, 18 * s, alpha)
 
     def label_pose(self, fr, lab, day):
         """Position/angle of an army label. Smoothed over +-6 days and aimed along a long chord of
@@ -401,7 +420,7 @@ class Renderer:
             tan = line[np.minimum(idx + 60, len(line) - 1)] - line[np.maximum(idx - 60, 0)]
             tan /= (np.linalg.norm(tan, axis=1, keepdims=True) + 1e-9)
             nrm = np.stack([-tan[:, 1], tan[:, 0]], 1) * sign  # side's territory is left of travel
-            pos.append((w[:, None] * (line + nrm * 12 * self.s)).sum(0) / w.sum())
+            pos.append((w[:, None] * (line + nrm * 24 * self.s)).sum(0) / w.sum())
             tan = np.where((tan @ lab["refdir"])[:, None] >= 0, tan, -tan)
             dirs.append((w[:, None] * tan).sum(0) / w.sum())
         p1 = np.average(pos, axis=0, weights=wts)
@@ -419,7 +438,7 @@ class Renderer:
             for k in range(8):
                 st = rot + k * 45
                 d.arc([x - r, y - r, x + r, y + r], st, st + 25, fill=(255, 255, 255, 235), width=max(2, int(2 * s)))
-            f = self.font("OpenSans-Bold.ttf", 13 * s)
+            f = self.font("LiberationSans-Bold.ttf", 13 * s)
             tw = d.textlength(txt, font=f)
             d.text((x + r + 6 * s, y - 9 * s), txt, font=f, fill=(255, 255, 255, 255),
                    stroke_width=max(1, int(1.4 * s)), stroke_fill=(40, 40, 40, 150))
@@ -431,14 +450,14 @@ class Renderer:
         hour = int((day % 1.0) * 24)
         if day >= END_DAY - 1e-6:
             dt, hour = T.END, 11
-        f_date = self.font("OpenSans-Bold.ttf", 22 * s)
-        f_time = self.font("OpenSans-Bold.ttf", 11 * s)
+        f_date = self.font("LiberationSans-Bold.ttf", 22 * s)
+        f_time = self.font("LiberationSans-Bold.ttf", 12 * s)
         x, y = 14 * s, 8 * s
-        dd = f"{dt.day:02d}"
-        d.text((x, y), dd, font=f_date, fill=(20, 20, 20))
-        d.text((x + 36 * s, y), MONTHS[dt.month - 1], font=f_date, fill=(20, 20, 20))
-        d.text((x + 36 * s + d.textlength(MONTHS[dt.month - 1], font=f_date) + 14 * s, y), str(dt.year),
-               font=f_date, fill=(20, 20, 20))
+        dd = str(dt.day)
+        d.text((x + 28 * s - d.textlength(dd, font=f_date), y), dd, font=f_date, fill=(15, 15, 15))
+        d.text((x + 40 * s, y), MONTHS[dt.month - 1], font=f_date, fill=(15, 15, 15))
+        d.text((x + 40 * s + d.textlength(MONTHS[dt.month - 1], font=f_date) + 8 * s, y), str(dt.year),
+               font=f_date, fill=(15, 15, 15))
         d.text((x + 1 * s, y + 31 * s), f"{hour:02d}:00", font=f_time, fill=(20, 20, 20))
         # caption (latest event)
         cap, cday = None, None
@@ -446,10 +465,10 @@ class Renderer:
             if eday <= day:
                 cap, cday = txt, eday
         if cap:
-            f = self.font("OpenSans-Bold.ttf", 19 * s)
+            f = self.font("LiberationSans-Bold.ttf", 20 * s)
             d.text((14 * s, H - 36 * s), cap, font=f, fill=(15, 15, 15))
         # legend
-        f = self.font("OpenSans-SemiBold.ttf", 11 * s)
+        f = self.font("LiberationSans-Bold.ttf", 11 * s)
         items = [(fac, name) for fac, name, since in T.LEGEND if since is None or day >= T.as_day(since)]
         lx, ly = W - 205 * s, H - 16 * s - 18 * s * len(items)
         for i, (fac, name) in enumerate(items):
@@ -536,7 +555,7 @@ def render_chunk(args):
     sched = load_schedule()
     r = Renderer(W, H)
     cmd = [ffmpeg_exe(), "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}",
-           "-r", str(FPS), "-i", "-", "-c:v", "libx264", "-preset", "medium", "-crf", "21", "-tune", "animation",
+           "-r", str(FPS), "-i", "-", "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-tune", "animation",
            "-pix_fmt", "yuv420p", "-g", "250", path]
     p = subprocess.Popen(cmd, stdin=subprocess.PIPE)
     for i in range(f0, f1):
