@@ -450,7 +450,7 @@ class Renderer:
                 alpha = min(1.0, (day - lab["army"][0][0] + 0.5) / 3.0)
                 if v <= 0 or alpha <= 0:
                     continue
-                p1, ang = self.label_pose(fr, lab, day)
+                p1, ang = self.label_pose(fr, lab, day, v)
                 cands.append((v, p1, ang, alpha, id(lab)))
         # fixed-position numbers (colonial campaigns, Tsingtao): drawn level
         for lab in [l for p in self.pockets for l in p["labels"]] + self.point_labels:
@@ -498,13 +498,13 @@ class Renderer:
         txt = f"{v:,}".replace(",", ".")
         self.draw_rotated_text(img, txt, p[0], p[1], ang, self.number_size(v), alpha)
 
-    def label_pose(self, fr, lab, day):
+    def label_pose(self, fr, lab, day, v):
         """Position/angle of an army label. Smoothed over +-6 days and aimed along a long chord of
         the front, with a fixed reading direction per label so the text never flips."""
         offs = np.linspace(-6.0, 6.0, 13)
         wts = np.exp(-0.5 * (offs / 3.0) ** 2)
         sign = fr["winding"][lab["side"]]
-        pos, dirs = [], []
+        pos, dirs, nrms = [], [], []
         for dd in offs:
             d = day + dd
             line, _ = self.front_line(fr, d)
@@ -520,12 +520,29 @@ class Renderer:
             tan = line[np.minimum(idx + span, len(line) - 1)] - line[np.maximum(idx - span, 0)]
             tan /= (np.linalg.norm(tan, axis=1, keepdims=True) + 1e-9)
             nrm = np.stack([-tan[:, 1], tan[:, 0]], 1) * sign  # side's territory is left of travel
-            pos.append((w[:, None] * (line + nrm * fr["label_off"] * self.s * self.ls)).sum(0) / w.sum())
+            pos.append((w[:, None] * line).sum(0) / w.sum())
+            nrms.append((w[:, None] * nrm).sum(0) / w.sum())
             tan = np.where((tan @ lab["refdir"])[:, None] >= 0, tan, -tan)
             dirs.append((w[:, None] * tan).sum(0) / w.sum())
-        p1 = np.average(pos, axis=0, weights=wts)
+        base = np.average(pos, axis=0, weights=wts)
+        n = np.average(nrms, axis=0, weights=wts)
+        n /= np.linalg.norm(n) + 1e-9
         t = np.average(dirs, axis=0, weights=wts)
-        return p1, -math.degrees(math.atan2(t[1], t[0]))
+        front = -math.degrees(math.atan2(t[1], t[0]))
+        if front > 90:
+            front -= 180
+        elif front < -90:
+            front += 180
+        # Tilt the number toward the front's direction but never more than ~45 degrees, like the
+        # reference: steep fronts get a readable slanted number instead of vertical text.
+        ang = 45.0 * math.tanh(front / 45.0)
+        # push the number far enough from the line that its (less tilted) box does not cross it
+        size = self.number_size(v)
+        half_w = self.font("LiberationSans-Bold.ttf", size).getlength(f"{v:,}") / 2
+        rel = math.radians(front - ang)
+        clear = half_w * abs(math.sin(rel)) + 0.6 * size * abs(math.cos(rel))
+        off = max(fr["label_off"] * self.s * self.ls, clear + 4 * self.s * self.ls)
+        return base + n * off, ang
 
     def draw_markers(self, img, day, vt):
         s = self.s
