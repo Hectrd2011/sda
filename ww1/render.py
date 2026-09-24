@@ -177,7 +177,8 @@ class Renderer:
                 poly = np.concatenate([keys[0][1], sides[s]["rear"]])
                 winding[s] = np.sign(np.sum(poly[:, 0] * np.roll(poly[:, 1], -1) - np.roll(poly[:, 0], -1) * poly[:, 1]))
             self.fronts.append(dict(name=f["name"], keys=keys, sides=sides, labels=labels, interp=interp,
-                                    winding=winding))
+                                    winding=winding, label_off=f.get("label_off", 32),
+                                    label_span=f.get("label_span", 60)))
         self.static = []
         for z in T.STATIC_ZONES:
             self.static.append(dict(z, poly_px=self.P(z["poly"]), a=T.as_day(z["start"]), b=T.as_day(z["end"])))
@@ -335,12 +336,16 @@ class Renderer:
         # light outline where two warring factions meet (only touches the outline pixels)
         fac = pal_f[idx]
         e = np.zeros((H, W), bool)
-        e[:, 1:] |= (fac[:, 1:] != fac[:, :-1]) & (fac[:, 1:] > 0) & (fac[:, :-1] > 0)
-        e[1:, :] |= (fac[1:, :] != fac[:-1, :]) & (fac[1:, :] > 0) & (fac[:-1, :] > 0)
-        if self.s > 2:  # keep the outline visible at 4K
+        dx = (fac[:, 1:] != fac[:, :-1]) & (fac[:, 1:] > 0) & (fac[:, :-1] > 0)
+        dy = (fac[1:, :] != fac[:-1, :]) & (fac[1:, :] > 0) & (fac[:-1, :] > 0)
+        e[:, 1:] |= dx
+        e[:, :-1] |= dx
+        e[1:, :] |= dy
+        e[:-1, :] |= dy
+        if self.s > 2:  # same visual thickness at 4K
             e = ndimage.binary_dilation(e)
         ys, xs = np.nonzero(e)
-        k = np.float32(0.4) * self.land[ys, xs][:, None]
+        k = np.float32(0.85) * self.land[ys, xs][:, None]
         out[ys, xs] = out[ys, xs] * (1 - k) + np.float32(0.97) * k
         np.clip(out, 0, 1, out=out)
         return (out * 255).astype(np.uint8)
@@ -397,7 +402,9 @@ class Renderer:
                     continue
                 p1, ang = self.label_pose(fr, lab, day)
                 txt = f"{v:,}".replace(",", ".")
-                self.draw_rotated_text(img, txt, p1[0], p1[1], ang, 18 * s, alpha)
+                # bigger armies get bigger numbers, like the reference video
+                size = min(21.0, 12.0 + 7.0 * math.sqrt(v / 2_500_000))
+                self.draw_rotated_text(img, txt, p1[0], p1[1], ang, size * s, alpha)
 
     def label_pose(self, fr, lab, day):
         """Position/angle of an army label. Smoothed over +-6 days and aimed along a long chord of
@@ -417,10 +424,11 @@ class Renderer:
             sig = 28.0 * self.s
             w = np.exp(-(d2 - d2.min()) / (2 * sig * sig))
             idx = np.arange(len(line))
-            tan = line[np.minimum(idx + 60, len(line) - 1)] - line[np.maximum(idx - 60, 0)]
+            span = fr["label_span"]
+            tan = line[np.minimum(idx + span, len(line) - 1)] - line[np.maximum(idx - span, 0)]
             tan /= (np.linalg.norm(tan, axis=1, keepdims=True) + 1e-9)
             nrm = np.stack([-tan[:, 1], tan[:, 0]], 1) * sign  # side's territory is left of travel
-            pos.append((w[:, None] * (line + nrm * 24 * self.s)).sum(0) / w.sum())
+            pos.append((w[:, None] * (line + nrm * fr["label_off"] * self.s)).sum(0) / w.sum())
             tan = np.where((tan @ lab["refdir"])[:, None] >= 0, tan, -tan)
             dirs.append((w[:, None] * tan).sum(0) / w.sum())
         p1 = np.average(pos, axis=0, weights=wts)
