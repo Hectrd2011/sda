@@ -639,8 +639,37 @@ def render_chunk(args):
         if (i - f0) % 250 == 0:
             print(f"[{os.path.basename(path)}] frame {i - f0}/{f1 - f0}", flush=True)
     p.stdin.close()
-    p.wait()
+    if p.wait() != 0:
+        raise RuntimeError(f"encoder failed for {path}")
+    open(path + ".done", "w").write("ok")  # lets an interrupted render resume
     return path
+
+
+def missing_ranges(chunk_dir, nframes):
+    """Frame ranges not yet covered by finished chunks (chunk_<f0>_<f1>.mp4 + .done)."""
+    done = []
+    for name in os.listdir(chunk_dir):
+        if name.endswith(".mp4.done"):
+            a, b = name[len("chunk_"):-len(".mp4.done")].split("_")
+            done.append((int(a), int(b)))
+    gaps, cur = [], 0
+    for a, b in sorted(done):
+        if a > cur:
+            gaps.append((cur, a))
+        cur = max(cur, b)
+    if cur < nframes:
+        gaps.append((cur, nframes))
+    return sorted(done), gaps
+
+
+def split_ranges(gaps, pieces):
+    total = sum(b - a for a, b in gaps)
+    out = []
+    for a, b in gaps:
+        n = max(1, round(pieces * (b - a) / max(total, 1)))
+        edges = np.linspace(a, b, n + 1).astype(int)
+        out += [(int(x), int(y)) for x, y in zip(edges, edges[1:]) if y > x]
+    return out
 
 
 def build_audio(sched, out_wav):
@@ -705,14 +734,27 @@ def main():
     total = sched.total if args.seconds is None else min(sched.total, args.seconds)
     nframes = int(total * FPS)
     jobs = max(1, args.jobs)
-    bounds = np.linspace(0, nframes, jobs + 1).astype(int)
-    chunk_dir = os.path.join(BUILD, "chunks" if args.view == "europe" else f"chunks_{args.view}")
+    chunk_dir = os.path.join(BUILD, f"chunks_{args.view}_{args.w}x{args.h}")
     os.makedirs(chunk_dir, exist_ok=True)
-    chunks = [(args.w, args.h, int(bounds[i]), int(bounds[i + 1]),
-               os.path.join(chunk_dir, f"chunk_{i:02d}.mp4"), args.view) for i in range(jobs)]
-    from multiprocessing import Pool
-    with Pool(jobs) as pool:
-        paths = pool.map(render_chunk, chunks)
+    from concurrent.futures import ProcessPoolExecutor
+    from concurrent.futures.process import BrokenProcessPool
+    for attempt in range(4):  # a worker killed (e.g. out of memory) only costs its own piece
+        done, gaps = missing_ranges(chunk_dir, nframes)
+        if not gaps:
+            break
+        todo = [(args.w, args.h, a, b, os.path.join(chunk_dir, f"chunk_{a:06d}_{b:06d}.mp4"), args.view)
+                for a, b in split_ranges(gaps, jobs)]
+        print(f"rendering {sum(t[3] - t[2] for t in todo)} frames in {len(todo)} pieces (attempt {attempt + 1})",
+              flush=True)
+        try:
+            with ProcessPoolExecutor(jobs) as ex:
+                list(ex.map(render_chunk, todo))
+        except (BrokenProcessPool, RuntimeError) as e:
+            print("worker failed, retrying missing pieces:", e, flush=True)
+    done, gaps = missing_ranges(chunk_dir, nframes)
+    if gaps:
+        raise SystemExit(f"could not render frames {gaps}")
+    paths = [os.path.join(chunk_dir, f"chunk_{a:06d}_{b:06d}.mp4") for a, b in done]
     lst = os.path.join(chunk_dir, "list.txt")
     with open(lst, "w") as f:
         for p in paths:
