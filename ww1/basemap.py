@@ -36,7 +36,7 @@ def _world_view():
     x1, _ = p(190, 0)
     _, y1 = p(0, 84)
     return View("world", "+proj=mill +lon_0=10 +over +ellps=WGS84", x0, x1, y1, seam=-170.0, min_lat=-60.0,
-                label_scale=0.78)
+                label_scale=0.55)
 
 
 VIEWS = {

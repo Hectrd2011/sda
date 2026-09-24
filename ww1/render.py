@@ -441,37 +441,62 @@ class Renderer:
             img.alpha_composite(r.crop((cx0, cy0, r.width, r.height)), (ix + cx0, iy + cy0))
 
     def draw_army_labels(self, img, day):
-        s = self.s
+        cands = []  # (army, position, angle, fade-in alpha, key)
         for fr in self.fronts:
-            line = fr.get("_line")
-            if line is None:
+            if fr.get("_line") is None:
                 continue
-            active, _ = self.front_line(fr, day)
             for lab in fr["labels"]:
                 v = self.army_value(lab, day)
-                if v <= 0:
-                    continue
-                first = lab["army"][0][0]
-                alpha = min(1.0, (day - first + 0.5) / 3.0)
-                if alpha <= 0:
+                alpha = min(1.0, (day - lab["army"][0][0] + 0.5) / 3.0)
+                if v <= 0 or alpha <= 0:
                     continue
                 p1, ang = self.label_pose(fr, lab, day)
-                self.draw_number(img, v, p1, ang, alpha)
+                cands.append((v, p1, ang, alpha, id(lab)))
         # fixed-position numbers (colonial campaigns, Tsingtao): drawn level
         for lab in [l for p in self.pockets for l in p["labels"]] + self.point_labels:
             v = self.army_value(lab, day)
-            if v <= 0:
-                continue
             alpha = min(1.0, (day - lab["army"][0][0] + 0.5) / 3.0)
+            if v <= 0 or alpha <= 0:
+                continue
             hx = T.interp_series([(k, q[0]) for k, q in lab["hint"]], day)
             hy = T.interp_series([(k, q[1]) for k, q in lab["hint"]], day)
-            self.draw_number(img, v, (hx, hy), 0.0, alpha)
+            cands.append((v, (hx, hy), 0.0, alpha, id(lab)))
+        # Numbers never overlap: bigger armies claim their space first; a number that would
+        # collide fades out (and back in once there is room) instead of piling on top.
+        vis = getattr(self, "_label_vis", {})
+        placed = []
+        for v, p, ang, alpha, key in sorted(cands, key=lambda c: -c[0]):
+            box = self.number_box(v, p, ang)
+            free = not any(box.intersects(b) for b in placed)
+            if free:
+                placed.append(box)
+            cur = vis.get(key, 1.0 if free else 0.0)
+            cur = min(1.0, cur + 0.15) if free else max(0.0, cur - 0.15)
+            vis[key] = cur
+            if cur > 0.01:
+                self.draw_number(img, v, p, ang, alpha * cur)
+        self._label_vis = vis
+
+    def number_size(self, v):
+        # bigger armies get bigger numbers, like the reference video
+        return min(15.0, 9.5 + 4.5 * math.sqrt(v / 2_500_000)) * self.ls * self.s
+
+    def number_box(self, v, p, ang):
+        """Rotated rectangle covered by a number (with a little breathing room)."""
+        txt = f"{v:,}".replace(",", ".")
+        size = self.number_size(v)
+        w = self.font("LiberationSans-Bold.ttf", size).getlength(txt) / 2 + 3 * self.s
+        h = size * 0.6 + 2 * self.s
+        a = math.radians(-ang)
+        ux, uy = math.cos(a), math.sin(a)
+        vx, vy = -uy, ux
+        cx, cy = p[0], p[1]
+        return Polygon([(cx + sx * w * ux + sy * h * vx, cy + sx * w * uy + sy * h * vy)
+                        for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))])
 
     def draw_number(self, img, v, p, ang, alpha):
         txt = f"{v:,}".replace(",", ".")
-        # bigger armies get bigger numbers, like the reference video
-        size = min(15.0, 9.5 + 4.5 * math.sqrt(v / 2_500_000)) * self.ls
-        self.draw_rotated_text(img, txt, p[0], p[1], ang, size * self.s, alpha)
+        self.draw_rotated_text(img, txt, p[0], p[1], ang, self.number_size(v), alpha)
 
     def label_pose(self, fr, lab, day):
         """Position/angle of an army label. Smoothed over +-6 days and aimed along a long chord of
