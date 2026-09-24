@@ -27,7 +27,7 @@ FACTIONS = {
     "OUT": ((150, 150, 140), 0.18),  # signed armistice
 }
 LEGEND = [("CP", "Central Powers", None), ("ENT", "Allied Powers", None),
-          ("SOV", "Soviet Russia", "1917-11-07"), ("OUT", "Signed an armistice", "1918-09-29")]
+          ("SOV", "Soviet Russia", "1917-11-07"), ("OUT", "Signed an armistice / peace", "1918-05-07")]
 
 # country -> [(date, faction)]; before the first date a country is neutral.
 ALLIANCES = {
@@ -47,7 +47,7 @@ ALLIANCES = {
     "ITA": [("1915-05-23", "ENT")], "LIB": [("1915-05-23", "ENT")],
     "BUL": [("1915-10-14", "CP"), ("1918-09-29", "OUT")],
     "POR": [("1916-03-09", "ENT")],
-    "ROM": [("1916-08-27", "ENT")],
+    "ROM": [("1916-08-27", "ENT"), ("1918-05-07", "OUT")],
     "GRE": [("1917-06-29", "ENT")],
 }
 
