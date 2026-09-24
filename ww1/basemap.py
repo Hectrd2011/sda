@@ -20,12 +20,33 @@ DATA = os.path.join(HERE, "data")
 CACHE = os.path.join(HERE, "build", "cache")
 DL = os.path.join(HERE, "build", "downloads")
 
-# Lambert conformal conic centred on Europe; extent chosen so the Western
-# Front, Petrograd and Baghdad/Basra all fit in a 16:9 frame.
-PROJ = pyproj.Proj("+proj=lcc +lat_1=35 +lat_2=60 +lat_0=47 +lon_0=17 +ellps=WGS84")
-X0, X1 = -2400e3, 3550e3
-Y1 = 1480e3
-Y0 = Y1 - (X1 - X0) * 9 / 16
+class View:
+    """A map view: projection, frame extent and (for world maps) the longitude where it wraps."""
+
+    def __init__(self, name, proj, x0, x1, y1, bbox=None, seam=None, min_lat=None, label_scale=1.0):
+        self.name, self.proj = name, pyproj.Proj(proj)
+        self.X0, self.X1, self.Y1 = x0, x1, y1
+        self.Y0 = y1 - (x1 - x0) * 9 / 16
+        self.bbox, self.seam, self.min_lat, self.label_scale = bbox, seam, min_lat, label_scale
+
+
+def _world_view():
+    p = pyproj.Proj("+proj=mill +lon_0=10 +over +ellps=WGS84")
+    x0, _ = p(-170, 0)
+    x1, _ = p(190, 0)
+    _, y1 = p(0, 84)
+    return View("world", "+proj=mill +lon_0=10 +over +ellps=WGS84", x0, x1, y1, seam=-170.0, min_lat=-60.0,
+                label_scale=0.78)
+
+
+VIEWS = {
+    # Lambert conformal conic centred on Europe; extent chosen so the Western
+    # Front, Petrograd and Baghdad/Basra all fit in a 16:9 frame.
+    "europe": View("europe", "+proj=lcc +lat_1=35 +lat_2=60 +lat_0=47 +lon_0=17 +ellps=WGS84",
+                   -2400e3, 3550e3, 1480e3, bbox=(-30, 15, 75, 90)),
+    # Miller cylindrical world map from Alaska (left) to Chukotka (right).
+    "world": _world_view(),
+}
 
 NE_URLS = {
     "SR_50M": "https://naturalearth.s3.amazonaws.com/50m_raster/SR_50M.zip",
@@ -49,6 +70,33 @@ NAME_KEYS = {
     "Netherlands": "NED", "Switzerland": "SUI", "Luxembourg": "LUX", "Albania": "ALB",
     "Persia": "PER", "Arabia (Nejd)": "ARA", "Qatar": "ARA", "Afghanistan": "AFG",
     "French West Africa": "ALG", "British Raj": "BPR",
+    # ---- rest of the world (used by the world view) ----
+    "Canada": "CAN", "Australia": "AUS", "New Zealand": "NZL", "Niue": "NZL", "South Africa": "SAF",
+    "Lesotho": "SAF", "Swaziland": "SAF", "Ceylon": "BPR", "British East Africa": "BEA", "Uganda": "BEA",
+    "Anglo-Egyptian Sudan": "SUD", "Nigeria": "BWA", "Gold Coast": "BWA", "Sierra Leone": "BWA",
+    "Gambia, The": "BWA", "British Somaliland": "BSO", "Rhodesia": "RHO", "Malawi": "RHO", "Botswana": "RHO",
+    "Malaya": "BAS", "Brunei": "BAS", "Hong Kong": "BAS", "Fiji": "BAS", "Tonga": "BAS",
+    "Belize": "BAM", "Guyana": "BAM", "Antigua and Barbuda": "BAM", "Barbados": "BAM", "Dominica": "BAM",
+    "Grenada": "BAM", "Montserrat": "BAM", "Saint Kitts and Nevis": "BAM", "Saint Lucia": "BAM",
+    "Saint Vincent and the Grenadines": "BAM", "Anguilla": "BAM",
+    "French Equatorial Africa": "FEA", "Madagascar (France)": "FEA", "Djibouti": "FEA",
+    "French Indochina": "FIC", "Wallis and Futuna Islands": "FIC", "French Guiana": "FAM",
+    "Guadeloupe": "FAM", "Martinique": "FAM", "Saint Barthelemy": "FAM", "Saint Martin": "FAM",
+    "Belgian Congo": "BCO", "Angola": "PCO", "Mozambique": "PCO", "Portuguese Guinea": "PCO",
+    "Eritrea": "ICO", "Italian Somaliland": "ICO",
+    "Kamerun": "KAM", "Togoland": "TOG", "German South-West Africa": "GSW",
+    "German E. Africa (Tanganyika)": "GEA", "Samoa": "GSA", "Papua New Guinea": "PNG",
+    "Empire of Japan": "JAP", "Sakhalin (RU)": "RUS",
+    "United States": "USA", "Puerto Rico": "USA", "Philippines": "USA", "American Samoa": "USA",
+    "United States Virgin Islands": "USA",
+    "Manchu Empire": "CHN", "Xinjiang": "CHN", "Tibet": "TIB", "Mongolia": "MNG",
+    "Brazil": "BRA", "Cuba": "CUB", "Panama": "PAN", "Guatemala": "GUA", "Nicaragua": "NIC",
+    "Costa Rica": "CRI", "Haiti": "HAI", "Honduras": "HON", "Liberia": "LBR", "Rattanakosin Kingdom": "SIA",
+    "Mexico": "MEX", "Argentina": "ARG", "Chile": "CHL", "Rapa Nui": "CHL", "Peru": "PRU", "Bolivia": "BOL",
+    "Paraguay": "PRY", "Uruguay": "URY", "Venezuela": "VEN", "Colombia": "COL", "Ecuador": "ECU",
+    "El Salvador": "SLV", "Dominican Republic": "DOM", "Suriname": "NED", "Netherlands Antilles": "NED",
+    "Netherlands Indies": "NEI", "Abyssinia": "ABY", "Nepal": "NEP", "Bhutan": "BHU",
+    "Equatorial Guinea": "ESP",
 }
 # Unnamed islands in the source data: (lon, lat) of a point on them -> key.
 ISLAND_OVERRIDES = [((9.1, 42.2), "FRA"), ((33.2, 35.1), "CYP"), ((24.9, 35.2), "GRE"),
@@ -130,14 +178,19 @@ def ensure_downloads():
 
 
 class Frame:
-    def __init__(self, W, H):
+    def __init__(self, W, H, view="europe"):
         self.W, self.H = W, H
-        self.sx = W / (X1 - X0)
-        self.sy = H / (Y1 - Y0)
+        self.view = v = VIEWS[view] if isinstance(view, str) else view
+        self.sx = W / (v.X1 - v.X0)
+        self.sy = H / (v.Y1 - v.Y0)
 
     def px(self, lon, lat, ss=1):
-        x, y = PROJ(np.asarray(lon, float), np.asarray(lat, float))
-        return (x - X0) * self.sx * ss, (Y1 - y) * self.sy * ss
+        v = self.view
+        lon = np.asarray(lon, float)
+        if v.seam is not None:
+            lon = np.where(lon < v.seam, lon + 360.0, lon)
+        x, y = v.proj(lon, np.asarray(lat, float))
+        return (x - v.X0) * self.sx * ss, (v.Y1 - y) * self.sy * ss
 
     def pts(self, lonlat, ss=1):
         a = np.asarray(lonlat, float)
@@ -145,11 +198,50 @@ class Frame:
         return list(zip(x.tolist(), y.tolist()))
 
     def lonlat_grid(self):
-        xs = X0 + (np.arange(self.W) + 0.5) / self.sx
-        ys = Y1 - (np.arange(self.H) + 0.5) / self.sy
+        v = self.view
+        xs = v.X0 + (np.arange(self.W) + 0.5) / self.sx
+        ys = v.Y1 - (np.arange(self.H) + 0.5) / self.sy
         gx, gy = np.meshgrid(xs, ys)
-        lon, lat = PROJ(gx, gy, inverse=True)
-        return lon, lat
+        lon, lat = v.proj(gx, gy, inverse=True)
+        return (lon + 180.0) % 360.0 - 180.0, lat
+
+    # -- geometry helpers that respect the view's extent and wrap seam --
+    def in_view(self, a):
+        v = self.view
+        if v.min_lat is not None and a[:, 1].max() < v.min_lat:
+            return False
+        if v.bbox is None:
+            return True
+        x0, y0, x1, y1 = v.bbox
+        return a[:, 0].max() > x0 and a[:, 0].min() < x1 and a[:, 1].max() > y0 and a[:, 1].min() < y1
+
+    def split_polygon(self, poly):
+        """Shapely polygon -> list of polygons that do not cross the wrap seam."""
+        v = self.view
+        if v.seam is None:
+            return [poly]
+        from shapely.geometry import box
+        from shapely.affinity import translate
+        out = []
+        for part, shift in ((poly.intersection(box(v.seam, -90, 180, 90)), 0.0),
+                            (poly.intersection(box(-180, -90, v.seam, 90)), 360.0)):
+            if part.is_empty:
+                continue
+            geoms = part.geoms if hasattr(part, "geoms") else [part]
+            for g in geoms:
+                if g.geom_type == "Polygon" and not g.is_empty:
+                    out.append(translate(g, shift) if shift else g)
+        return out
+
+    def split_line(self, a):
+        """(N,2) lon/lat polyline -> pieces that do not jump across the wrap seam."""
+        v = self.view
+        if v.seam is None:
+            return [a]
+        lon = np.where(a[:, 0] < v.seam, a[:, 0] + 360.0, a[:, 0])
+        cut = np.nonzero(np.abs(np.diff(lon)) > 180)[0]
+        pieces = np.split(np.stack([lon, a[:, 1]], 1), cut + 1)
+        return [p for p in pieces if len(p) > 1]
 
 
 def _rings(geom):
@@ -158,54 +250,56 @@ def _rings(geom):
         yield poly[0], poly[1:]
 
 
-def _clip_ring(ring):
-    a = np.asarray(ring, float)
-    return a if (a[:, 0].max() > -30 and a[:, 0].min() < 75 and a[:, 1].max() > 15) else None
-
-
-def build(W=1280, H=720):
+def build(W=1280, H=720, view="europe"):
     os.makedirs(CACHE, exist_ok=True)
-    out = os.path.join(CACHE, f"basemap_{W}x{H}.npz")
+    vname = view if isinstance(view, str) else view.name
+    out = os.path.join(CACHE, f"basemap_{vname}_{W}x{H}_k{len(KEY_ID)}.npz")
     if os.path.exists(out):
         return dict(np.load(out))
     ensure_downloads()
-    fr = Frame(W, H)
+    fr = Frame(W, H, view)
     SS = 3  # supersampling for anti-aliased lines
+    from shapely.geometry import Polygon as SPolygon
+
+    def polys_of(geom):
+        gs = geom.geoms if geom.geom_type == "MultiPolygon" else [geom]
+        for g in gs:
+            if not fr.in_view(np.asarray(g.exterior.coords)):
+                continue
+            yield from fr.split_polygon(g)
 
     # ---- country id raster (drawn at SS, borders derived from it) --------------
     idimg = Image.new("L", (W * SS, H * SS), 0)
     dr = ImageDraw.Draw(idimg)
     for key, shp in country_shapes().items():
-        polys = shp.geoms if shp.geom_type == "MultiPolygon" else [shp]
-        for p in polys:
-            e = _clip_ring(p.exterior.coords)
-            if e is None:
-                continue
-            dr.polygon(fr.pts(e, SS), fill=KEY_ID[key])
+        for p in polys_of(shp):
+            dr.polygon(fr.pts(p.exterior.coords, SS), fill=KEY_ID[key])
             for h in p.interiors:
                 dr.polygon(fr.pts(h.coords, SS), fill=0)
 
     # ---- land / water ---------------------------------------------------------
+    def shp_rings(path):
+        for s in shapefile.Reader(path).shapes():
+            parts = list(s.parts) + [len(s.points)]
+            for i in range(len(parts) - 1):
+                r = np.asarray(s.points[parts[i]:parts[i + 1]], float)
+                if len(r) > 2 and fr.in_view(r):
+                    yield r
+
     land = Image.new("L", (W * SS, H * SS), 0)
     ld = ImageDraw.Draw(land)
-    sf = shapefile.Reader(os.path.join(DL, "ne_50m_land", "ne_50m_land.shp"))
     coast = []
-    for s in sf.shapes():
-        parts = list(s.parts) + [len(s.points)]
-        for i in range(len(parts) - 1):
-            r = _clip_ring(s.points[parts[i]:parts[i + 1]])
-            if r is not None:
-                ld.polygon(fr.pts(r, SS), fill=255)
-                coast.append(r)
+    for r in shp_rings(os.path.join(DL, "ne_50m_land", "ne_50m_land.shp")):
+        if fr.view.min_lat is not None and r[:, 1].max() < fr.view.min_lat:
+            continue
+        for p in fr.split_polygon(SPolygon(r).buffer(0)):
+            ld.polygon(fr.pts(p.exterior.coords, SS), fill=255)
+        coast.append(r)  # outline from the original ring (split_line handles the seam)
     lakes = []
-    sf = shapefile.Reader(os.path.join(DL, "ne_50m_lakes", "ne_50m_lakes.shp"))
-    for s in sf.shapes():
-        parts = list(s.parts) + [len(s.points)]
-        for i in range(len(parts) - 1):
-            r = _clip_ring(s.points[parts[i]:parts[i + 1]])
-            if r is not None:
-                ld.polygon(fr.pts(r, SS), fill=0)
-                lakes.append(r)
+    for r in shp_rings(os.path.join(DL, "ne_50m_lakes", "ne_50m_lakes.shp")):
+        for p in fr.split_polygon(SPolygon(r).buffer(0)):
+            ld.polygon(fr.pts(p.exterior.coords, SS), fill=0)
+        lakes.append(r)
     land_a = np.asarray(land.resize((W, H), Image.BOX), np.float32) / 255.0
     landmask = land_a > 0.5
 
@@ -221,7 +315,7 @@ def build(W=1280, H=720):
     Image.MAX_IMAGE_PIXELS = None
     sr = np.asarray(Image.open(os.path.join(DL, "SR_50M", "SR_50M.tif")), np.float32)
     lon, lat = fr.lonlat_grid()
-    col = (lon + 179.98333) / 0.0333333
+    col = ((lon + 179.98333) % 360.0) / 0.0333333
     row = (89.98333 - lat) / 0.0333333
     relief = ndimage.map_coordinates(sr, [row, col], order=1) / 255.0
     rel = np.clip((relief - 0.55) * 1.3 + 0.8, 0.45, 1.06)
@@ -243,10 +337,11 @@ def build(W=1280, H=720):
         im = Image.new("L", (W * SS, H * SS), 0)
         d = ImageDraw.Draw(im)
         for r in rings_or_lines:
-            p = fr.pts(r, SS)
+            r = np.asarray(r, float)
             if closed:
-                p = p + [p[0]]
-            d.line(p, fill=255, width=width, joint="curve")
+                r = np.concatenate([r, r[:1]])
+            for piece in fr.split_line(r):
+                d.line(fr.pts(piece, SS), fill=255, width=width, joint="curve")
         return np.asarray(im.resize((W, H), Image.BOX), np.float32) / 255.0
 
     coast_a = line_layer(coast + lakes, max(1, SS // 2))
@@ -263,7 +358,7 @@ def build(W=1280, H=720):
         parts = list(s.parts) + [len(s.points)]
         for i in range(len(parts) - 1):
             r = np.asarray(s.points[parts[i]:parts[i + 1]], float)
-            if len(r) > 1 and r[:, 0].max() > -30 and r[:, 0].min() < 75 and r[:, 1].max() > 15:
+            if len(r) > 1 and fr.in_view(r):
                 rivers.append(r)
     river_a = line_layer(rivers, max(1, SS // 2), closed=False) * land_a
 
@@ -277,7 +372,7 @@ def build(W=1280, H=720):
         parts = list(s.parts) + [len(s.points)]
         for i in range(len(parts) - 1):
             r = np.asarray(s.points[parts[i]:parts[i + 1]], float)
-            if len(r) > 1 and r[:, 0].max() > -30 and r[:, 0].min() < 75 and r[:, 1].max() > 15:
+            if len(r) > 1 and fr.in_view(r):
                 rails.append(r)
     rail_a = line_layer(rails, max(1, SS // 2), closed=False) * land_a
 
@@ -295,11 +390,12 @@ def build(W=1280, H=720):
 if __name__ == "__main__":
     import sys
     W, H = (int(sys.argv[1]), int(sys.argv[2])) if len(sys.argv) > 2 else (1280, 720)
-    r = build(W, H)
+    view = sys.argv[3] if len(sys.argv) > 3 else "europe"
+    r = build(W, H, view)
     img = (np.clip(r["base"], 0, 1) * 255).astype(np.uint8)
-    Image.fromarray(img).save(os.path.join(CACHE, "base_preview.png"))
+    Image.fromarray(img).save(os.path.join(CACHE, f"base_preview_{view}.png"))
     rng = np.random.default_rng(0)
     pal = rng.integers(60, 255, (256, 3)).astype(np.uint8)
     pal[0] = 0
-    Image.fromarray(pal[r["ids"]]).save(os.path.join(CACHE, "ids_preview.png"))
+    Image.fromarray(pal[r["ids"]]).save(os.path.join(CACHE, f"ids_preview_{view}.png"))
     print({k: KEY_ID[k] for k in COUNTRY_KEYS})

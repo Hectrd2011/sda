@@ -20,6 +20,7 @@ from shapely.geometry import Point, Polygon
 import audio
 import basemap as bm
 import timeline as T
+import timeline_world as TW
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BUILD = os.path.join(HERE, "build")
@@ -92,11 +93,14 @@ class Schedule:
 
 # ----------------------------------------------------------------------------- renderer
 class Renderer:
-    def __init__(self, W, H, lite=False):
+    def __init__(self, W, H, lite=False, view="europe"):
         self.W, self.H = W, H
         self.s = W / 1280.0
-        self.fr = bm.Frame(W, H)
-        base = bm.build(W, H)
+        self.view_name = view
+        self.world = view == "world"
+        self.fr = bm.Frame(W, H, view)
+        self.ls = self.fr.view.label_scale  # smaller text on the world map
+        base = bm.build(W, H, view)
         self.base = base["base"]
         self.ids = base["ids"]
         self.land = base["land"]
@@ -108,11 +112,20 @@ class Renderer:
         self._mask_cache = {}
         self._prepare_fronts()
         self._fonts = {}
-        self.alliance = {k: [(T.as_day(d), f) for d, f in v] for k, v in T.ALLIANCES.items()}
-        self.events = [(T.as_day(d), txt) for d, txt in T.EVENTS]
-        self.markers = [(txt, *self.fr.px(lo, la), T.as_day(a), T.as_day(b) + 1) for txt, lo, la, a, b in T.MARKERS]
+        alliances = dict(T.ALLIANCES, **(TW.ALLIANCES if self.world else {}))
+        self.alliance = {k: [(T.as_day(d), f) for d, f in v] for k, v in alliances.items()}
+        events = sorted(T.EVENTS + (TW.EVENTS if self.world else []), key=lambda e: e[0])
+        self.events, last = [], None
+        for d, txt in events:  # two events on the same day: show the second half a day later
+            day = T.as_day(d)
+            if last is not None and day <= last:
+                day = last + 0.5
+            self.events.append((day, txt))
+            last = day
+        markers = TW.MARKERS if self.world else T.MARKERS
+        self.markers = [(txt, *self.fr.px(lo, la), T.as_day(a), T.as_day(b) + 1) for txt, lo, la, a, b in markers]
         # half-resolution twin used to work out how recently each pixel changed hands
-        self.lo = None if lite else Renderer(min(W // 2, 960), min(H // 2, 540), lite=True)
+        self.lo = None if lite else Renderer(min(W // 2, 960), min(H // 2, 540), lite=True, view=view)
 
     # -- helpers -------------------------------------------------------------------------------
     def font(self, name, size):
@@ -180,8 +193,36 @@ class Renderer:
                                     winding=winding, label_off=f.get("label_off", 26),
                                     label_span=f.get("label_span", 60)))
         self.static = []
-        for z in T.STATIC_ZONES:
+        for z in T.STATIC_ZONES + (TW.STATIC_ZONES if self.world else []):
             self.static.append(dict(z, poly_px=self.P(z["poly"]), a=T.as_day(z["start"]), b=T.as_day(z["end"])))
+        # colonial campaigns (world map): shrinking or moving ellipses
+        self.pockets = []
+        for p in (TW.POCKETS if self.world else []):
+            keys = [(T.as_day(d), np.array([cx, cy, rx, ry], float)) for d, cx, cy, rx, ry in p["keys"]]
+            labels = [dict(hint=[(T.as_day(d), self.P([q])[0]) for d, q in lab["hint"]],
+                           army=[(T.as_day(d), v) for d, v in lab["army"]], seed=31 + i)
+                      for i, lab in enumerate(p["labels"])]
+            self.pockets.append(dict(p, keys=keys, labels=labels))
+        self.point_labels = [dict(hint=[(T.as_day(d), self.P([q])[0]) for d, q in lab["hint"]],
+                                  army=[(T.as_day(d), v) for d, v in lab["army"]], seed=71 + i)
+                             for i, lab in enumerate(TW.POINT_LABELS if self.world else [])]
+
+    def pocket_ring(self, p, day):
+        """Ellipse (in pixels) of a colonial campaign at a fractional day, or None if not started."""
+        keys = p["keys"]
+        if day < keys[0][0]:
+            return None
+        if day >= keys[-1][0]:
+            e = keys[-1][1]
+        else:
+            for (d0, e0), (d1, e1) in zip(keys, keys[1:]):
+                if day <= d1:
+                    u = (day - d0) / max(d1 - d0, 1e-9)
+                    e = e0 + (e1 - e0) * (u * u * (3 - 2 * u))
+                    break
+        cx, cy, rx, ry = e
+        t = np.linspace(0, 2 * np.pi, 48, endpoint=False)
+        return self.P(np.stack([cx + rx * np.cos(t), cy + ry * np.sin(t)], 1)), rx > 1e-3 or ry > 1e-3
 
     def front_line(self, fr, day):
         """Front line at a (fractional) day: monotone cubic interpolation between keyframes,
@@ -265,6 +306,18 @@ class Renderer:
             if z["a"] <= day < z["b"]:
                 vm, bbox = self.victim_mask(z["victims"], day)
                 yield self.poly_mask(z["poly_px"], bbox) * vm[bbox[1]:bbox[3], bbox[0]:bbox[2]], z["occ"], bbox
+        for p in self.pockets:
+            got = self.pocket_ring(p, day)
+            if got is None:
+                continue
+            ring, open_ = got
+            vm, bbox = self.victim_mask(p["victims"], day)
+            if bbox is None:
+                continue
+            e = self.poly_mask(ring, bbox) if open_ else 0.0
+            m = vm[bbox[1]:bbox[3], bbox[0]:bbox[2]] * ((1 - e) if p["mode"] == "outside" else e)
+            if np.max(m) > 0.01:
+                yield m, p["occ"], bbox
 
     def zone_codes(self, day, base):
         fac = base.copy()
@@ -401,10 +454,22 @@ class Renderer:
                 if alpha <= 0:
                     continue
                 p1, ang = self.label_pose(fr, lab, day)
-                txt = f"{v:,}".replace(",", ".")
-                # bigger armies get bigger numbers, like the reference video
-                size = min(15.0, 9.5 + 4.5 * math.sqrt(v / 2_500_000))
-                self.draw_rotated_text(img, txt, p1[0], p1[1], ang, size * s, alpha)
+                self.draw_number(img, v, p1, ang, alpha)
+        # fixed-position numbers (colonial campaigns, Tsingtao): drawn level
+        for lab in [l for p in self.pockets for l in p["labels"]] + self.point_labels:
+            v = self.army_value(lab, day)
+            if v <= 0:
+                continue
+            alpha = min(1.0, (day - lab["army"][0][0] + 0.5) / 3.0)
+            hx = T.interp_series([(k, q[0]) for k, q in lab["hint"]], day)
+            hy = T.interp_series([(k, q[1]) for k, q in lab["hint"]], day)
+            self.draw_number(img, v, (hx, hy), 0.0, alpha)
+
+    def draw_number(self, img, v, p, ang, alpha):
+        txt = f"{v:,}".replace(",", ".")
+        # bigger armies get bigger numbers, like the reference video
+        size = min(15.0, 9.5 + 4.5 * math.sqrt(v / 2_500_000)) * self.ls
+        self.draw_rotated_text(img, txt, p[0], p[1], ang, size * self.s, alpha)
 
     def label_pose(self, fr, lab, day):
         """Position/angle of an army label. Smoothed over +-6 days and aimed along a long chord of
@@ -428,7 +493,7 @@ class Renderer:
             tan = line[np.minimum(idx + span, len(line) - 1)] - line[np.maximum(idx - span, 0)]
             tan /= (np.linalg.norm(tan, axis=1, keepdims=True) + 1e-9)
             nrm = np.stack([-tan[:, 1], tan[:, 0]], 1) * sign  # side's territory is left of travel
-            pos.append((w[:, None] * (line + nrm * fr["label_off"] * self.s)).sum(0) / w.sum())
+            pos.append((w[:, None] * (line + nrm * fr["label_off"] * self.s * self.ls)).sum(0) / w.sum())
             tan = np.where((tan @ lab["refdir"])[:, None] >= 0, tan, -tan)
             dirs.append((w[:, None] * tan).sum(0) / w.sum())
         p1 = np.average(pos, axis=0, weights=wts)
@@ -441,12 +506,12 @@ class Renderer:
         for txt, x, y, a, b in self.markers:
             if not (a <= day < b):
                 continue
-            r = 7 * s
+            r = 7 * s * self.ls
             rot = (vt * 90) % 360
             for k in range(8):
                 st = rot + k * 45
                 d.arc([x - r, y - r, x + r, y + r], st, st + 25, fill=(255, 255, 255, 235), width=max(2, int(2 * s)))
-            f = self.font("LiberationSans-Bold.ttf", 10 * s)
+            f = self.font("LiberationSans-Bold.ttf", 10 * s * max(self.ls, 0.8))
             tw = d.textlength(txt, font=f)
             d.text((x + r + 6 * s, y - 9 * s), txt, font=f, fill=(255, 255, 255, 255),
                    stroke_width=max(1, int(1.4 * s)), stroke_fill=(40, 40, 40, 150))
@@ -494,8 +559,10 @@ class Renderer:
         f1 = self.font("OpenSans-Bold.ttf", 64 * s)
         f2 = self.font("OpenSans-SemiBold.ttf", 26 * s)
         f3 = self.font("OpenSans-Regular.ttf", 17 * s)
+        sub = ("All Fronts of the World - Every Day with Army Sizes" if self.world
+               else "Every Front, Every Day - with Army Sizes")
         for txt, f, y, c in [("WORLD WAR I", f1, H * 0.34, (255, 255, 255)),
-                             ("Every Front, Every Day - with Army Sizes", f2, H * 0.47, (230, 230, 230)),
+                             (sub, f2, H * 0.47, (230, 230, 230)),
                              ("28 July 1914  -  11 November 1918", f3, H * 0.55, (200, 200, 200))]:
             w = d.textlength(txt, font=f)
             d.text(((W - w) / 2, y), txt, font=f, fill=c + (int(255 * a),))
@@ -559,9 +626,9 @@ def load_schedule():
 
 
 def render_chunk(args):
-    W, H, f0, f1, path = args
+    W, H, f0, f1, path, view = args
     sched = load_schedule()
-    r = Renderer(W, H)
+    r = Renderer(W, H, view=view)
     cmd = [ffmpeg_exe(), "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}",
            "-r", str(FPS), "-i", "-", "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-tune", "animation",
            "-pix_fmt", "yuv420p", "-g", "250", path]
@@ -606,6 +673,7 @@ def main():
     ap.add_argument("--out", default=os.path.join(os.path.dirname(HERE), "WW1_Every_Day_with_Army_Sizes.mp4"))
     ap.add_argument("--seconds", type=float, default=None, help="render only the first N seconds")
     ap.add_argument("--vt", type=float, default=None, help="preview at a video time")
+    ap.add_argument("--view", choices=["europe", "world"], default="europe")
     args = ap.parse_args()
     sched = load_schedule()
     if args.mode == "info":
@@ -614,7 +682,7 @@ def main():
             print(s["date"], f"{s['t0']:.1f}s", s["speaker"])
         return
     if args.mode == "preview":
-        r = Renderer(args.w, args.h)
+        r = Renderer(args.w, args.h, view=args.view)
         if args.vt is not None:
             vt = args.vt
         else:
@@ -624,7 +692,7 @@ def main():
         t = time.time()
         img = r.frame(vt, sched)
         print("frame time", round(time.time() - t, 3))
-        out = os.path.join(BUILD, f"preview_{args.date or vt}.png")
+        out = os.path.join(BUILD, f"preview_{args.view}_{args.date or vt}.png")
         img.save(out)
         print(out)
         return
@@ -638,12 +706,14 @@ def main():
     nframes = int(total * FPS)
     jobs = max(1, args.jobs)
     bounds = np.linspace(0, nframes, jobs + 1).astype(int)
+    chunk_dir = os.path.join(BUILD, "chunks" if args.view == "europe" else f"chunks_{args.view}")
+    os.makedirs(chunk_dir, exist_ok=True)
     chunks = [(args.w, args.h, int(bounds[i]), int(bounds[i + 1]),
-               os.path.join(BUILD, "chunks", f"chunk_{i:02d}.mp4")) for i in range(jobs)]
+               os.path.join(chunk_dir, f"chunk_{i:02d}.mp4"), args.view) for i in range(jobs)]
     from multiprocessing import Pool
     with Pool(jobs) as pool:
         paths = pool.map(render_chunk, chunks)
-    lst = os.path.join(BUILD, "chunks", "list.txt")
+    lst = os.path.join(chunk_dir, "list.txt")
     with open(lst, "w") as f:
         for p in paths:
             f.write(f"file '{p}'\n")
