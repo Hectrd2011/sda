@@ -177,7 +177,7 @@ class Renderer:
                 poly = np.concatenate([keys[0][1], sides[s]["rear"]])
                 winding[s] = np.sign(np.sum(poly[:, 0] * np.roll(poly[:, 1], -1) - np.roll(poly[:, 0], -1) * poly[:, 1]))
             self.fronts.append(dict(name=f["name"], keys=keys, sides=sides, labels=labels, interp=interp,
-                                    winding=winding, label_off=f.get("label_off", 32),
+                                    winding=winding, label_off=f.get("label_off", 26),
                                     label_span=f.get("label_span", 60)))
         self.static = []
         for z in T.STATIC_ZONES:
@@ -403,7 +403,7 @@ class Renderer:
                 p1, ang = self.label_pose(fr, lab, day)
                 txt = f"{v:,}".replace(",", ".")
                 # bigger armies get bigger numbers, like the reference video
-                size = min(21.0, 12.0 + 7.0 * math.sqrt(v / 2_500_000))
+                size = min(15.0, 9.5 + 4.5 * math.sqrt(v / 2_500_000))
                 self.draw_rotated_text(img, txt, p1[0], p1[1], ang, size * s, alpha)
 
     def label_pose(self, fr, lab, day):
@@ -446,7 +446,7 @@ class Renderer:
             for k in range(8):
                 st = rot + k * 45
                 d.arc([x - r, y - r, x + r, y + r], st, st + 25, fill=(255, 255, 255, 235), width=max(2, int(2 * s)))
-            f = self.font("LiberationSans-Bold.ttf", 13 * s)
+            f = self.font("LiberationSans-Bold.ttf", 10 * s)
             tw = d.textlength(txt, font=f)
             d.text((x + r + 6 * s, y - 9 * s), txt, font=f, fill=(255, 255, 255, 255),
                    stroke_width=max(1, int(1.4 * s)), stroke_fill=(40, 40, 40, 150))

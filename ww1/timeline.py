@@ -110,7 +110,7 @@ def sum_series(*series):
 FRONTS = [
     dict(
         name="Western Front",
-        label_off=20,
+        label_off=16,
         A=dict(occ="ENT", victims=["GER"],
                rear=[(7.0, 47.2), (5.0, 46.5), (-5.0, 46.0), (-5.0, 51.0), (-3.0, 52.5)]),
         B=dict(occ="CP", victims=["FRA", "BEL"],
@@ -436,7 +436,7 @@ FRONTS = [
     ),
     dict(
         name="Balkan Front",
-        label_off=20,
+        label_off=16,
         A=dict(occ="CP", victims=["SER", "MNE", ("ALB", "1916-01-15"), ("GRE", "1916-05-20")],
                rear=[(27.0, 41.3), (29.0, 43.0), (28.0, 48.0), (15.0, 47.0), (15.0, 43.5)]),
         B=dict(occ="ENT", victims=["AUH", "BUL"],
