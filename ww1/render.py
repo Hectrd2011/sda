@@ -246,8 +246,11 @@ class Renderer:
         ImageDraw.Draw(im).polygon(pts, fill=255)
         m = np.asarray(im.resize((x1 - x0, y1 - y0), Image.BOX), np.float32) / 255.0
         m = ndimage.grey_opening(m, size=(3, 3))
-        if len(self._mask_cache) > 400:
+        # cap the cache by memory, not entry count: at 4K one mask can be tens of MB
+        self._mask_bytes = getattr(self, "_mask_bytes", 0) + m.nbytes
+        if self._mask_bytes > 300e6:
             self._mask_cache.clear()
+            self._mask_bytes = m.nbytes
         self._mask_cache[key] = m
         return m
 
@@ -631,7 +634,7 @@ def render_chunk(args):
     r = Renderer(W, H, view=view)
     cmd = [ffmpeg_exe(), "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}",
            "-r", str(FPS), "-i", "-", "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-tune", "animation",
-           "-pix_fmt", "yuv420p", "-g", "250", path]
+           "-pix_fmt", "yuv420p", "-g", "250", "-threads", "2", "-x264-params", "rc-lookahead=15", path]
     p = subprocess.Popen(cmd, stdin=subprocess.PIPE)
     for i in range(f0, f1):
         img = r.frame(i / FPS, sched)
@@ -738,6 +741,9 @@ def main():
     os.makedirs(chunk_dir, exist_ok=True)
     from concurrent.futures import ProcessPoolExecutor
     from concurrent.futures.process import BrokenProcessPool
+    # build the (memory-hungry) static map layers once, before the workers start
+    bm.build(args.w, args.h, args.view)
+    bm.build(min(args.w // 2, 960), min(args.h // 2, 540), args.view)
     for attempt in range(4):  # a worker killed (e.g. out of memory) only costs its own piece
         done, gaps = missing_ranges(chunk_dir, nframes)
         if not gaps:
