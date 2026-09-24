@@ -23,19 +23,18 @@ END = D("1918-11-11")
 FACTIONS = {
     "CP": ((72, 78, 56), 0.72),      # Central Powers
     "ENT": ((66, 110, 212), 0.64),   # Entente / Allies
-    "RUS": ((204, 88, 56), 0.66),    # Russian Empire
-    "SOV": ((196, 118, 96), 0.45),   # Soviet Russia (out of the war)
+    "SOV": ((204, 88, 56), 0.66),    # Soviet Russia (from the October Revolution)
     "OUT": ((150, 150, 140), 0.18),  # signed armistice
 }
-LEGEND = [("CP", "Central Powers", None), ("ENT", "Allied Powers", None), ("RUS", "Russian Empire", None),
-          ("SOV", "Soviet Russia (out of the war)", "1918-03-03"), ("OUT", "Signed an armistice", "1918-09-29")]
+LEGEND = [("CP", "Central Powers", None), ("ENT", "Allied Powers", None),
+          ("SOV", "Soviet Russia", "1917-11-07"), ("OUT", "Signed an armistice", "1918-09-29")]
 
 # country -> [(date, faction)]; before the first date a country is neutral.
 ALLIANCES = {
     "AUH": [("1914-07-28", "CP"), ("1918-11-04", "OUT")],
     "SER": [("1914-07-28", "ENT")],
-    "RUS": [("1914-08-01", "RUS"), ("1918-03-03", "SOV")],
-    "FIN": [("1914-08-01", "RUS"), ("1917-12-06", None)],
+    "RUS": [("1914-08-01", "ENT"), ("1917-11-07", "SOV")],
+    "FIN": [("1914-08-01", "ENT"), ("1917-12-06", None)],
     "GER": [("1914-08-01", "CP"), ("1918-11-11", "OUT")],
     "LUX": [("1914-08-02", "CP"), ("1918-11-11", None)],
     "FRA": [("1914-08-03", "ENT")], "ALG": [("1914-08-03", "ENT")],
@@ -251,7 +250,7 @@ FRONTS = [
         name="Eastern Front",
         A=dict(occ="CP", victims=["RUS"], rear=[(28.5, 43.0), (25.5, 46.0), (20.0, 44.0), (14.0, 46.0),
                                                 (14.0, 55.5)]),
-        B=dict(occ="RUS", victims=["GER", "AUH"], rear=[(40.0, 44.0), (50.0, 48.0), (50.0, 62.0),
+        B=dict(occ="ENT", victims=["GER", "AUH"], rear=[(40.0, 44.0), (50.0, 48.0), (50.0, 62.0),
                                                         (25.0, 61.0), (19.5, 58.0)]),
         keys=[
             ("1914-08-01", [(19.5, 57.0), (20.95, 56.05), GER_RUS, AUH_RUS] + EF_END),
@@ -578,7 +577,7 @@ FRONTS = [
     ),
     dict(
         name="Caucasus Front",
-        A=dict(occ="RUS", victims=["OTT"], rear=[(50.0, 40.0), (50.0, 45.0), (38.0, 45.0), (37.0, 43.0)]),
+        A=dict(occ="ENT", victims=["OTT"], rear=[(50.0, 40.0), (50.0, 45.0), (38.0, 45.0), (37.0, 43.0)]),
         B=dict(occ="CP", victims=["RUS"], rear=[(48.5, 38.0), (44.5, 37.0), (36.0, 37.0), (36.0, 41.8)],
                until="1918-10-30"),
         keys=[

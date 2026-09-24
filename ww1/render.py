@@ -102,7 +102,7 @@ class Renderer:
         self.land = base["land"]
         self.border = base["border"]
         self.key_of = {v: k for k, v in bm.KEY_ID.items()}
-        self.fac_code = {None: 0, "CP": 1, "ENT": 2, "RUS": 3, "SOV": 4, "OUT": 5}
+        self.fac_code = {None: 0, "CP": 1, "ENT": 2, "SOV": 4, "OUT": 5}
         self._victim_cache = {}
         self._mask_cache = {}
         self._prepare_fronts()
