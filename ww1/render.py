@@ -101,6 +101,7 @@ class Renderer:
         self.ids = base["ids"]
         self.land = base["land"]
         self.border = base["border"]
+        self.rail = base["rail"]
         self.key_of = {v: k for k, v in bm.KEY_ID.items()}
         self.fac_code = {None: 0, "CP": 1, "ENT": 2, "SOV": 4, "OUT": 5}
         self._victim_cache = {}
@@ -309,6 +310,9 @@ class Renderer:
             if lt is not None:  # freshly captured land: whitish, fading into the occupier's colour
                 k = (0.8 * lt)[..., None]
                 out = out * (1 - k) + np.float32(0.96) * k
+        # railways: thin dark lines, like the reference maps
+        rl = self.rail[..., None] * 0.42
+        out = out * (1 - rl) + np.float32(0.12) * rl
         # borders (pink, like old atlas maps)
         b = self.border[..., None] * 0.55
         out = out * (1 - b) + np.array([0.86, 0.45, 0.5], np.float32) * b

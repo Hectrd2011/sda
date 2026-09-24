@@ -32,6 +32,7 @@ NE_URLS = {
     "ne_50m_land": "https://naturalearth.s3.amazonaws.com/50m_physical/ne_50m_land.zip",
     "ne_50m_lakes": "https://naturalearth.s3.amazonaws.com/50m_physical/ne_50m_lakes.zip",
     "ne_50m_rivers_lake_centerlines": "https://naturalearth.s3.amazonaws.com/50m_physical/ne_50m_rivers_lake_centerlines.zip",
+    "ne_10m_railroads": "https://naturalearth.s3.amazonaws.com/10m_cultural/ne_10m_railroads.zip",
 }
 
 # 1914 polity name -> country key used by the timeline.
@@ -266,13 +267,27 @@ def build(W=1280, H=720):
                 rivers.append(r)
     river_a = line_layer(rivers, max(1, SS // 2), closed=False) * land_a
 
+    # railways (main and secondary lines), drawn on top of the alliance colours by the renderer
+    rails = []
+    sf = shapefile.Reader(os.path.join(DL, "ne_10m_railroads", "ne_10m_railroads.shp"))
+    for sr in sf.iterShapeRecords():
+        if sr.record["category"] not in (1, 2):
+            continue
+        s = sr.shape
+        parts = list(s.parts) + [len(s.points)]
+        for i in range(len(parts) - 1):
+            r = np.asarray(s.points[parts[i]:parts[i + 1]], float)
+            if len(r) > 1 and r[:, 0].max() > -30 and r[:, 0].min() < 75 and r[:, 1].max() > 15:
+                rails.append(r)
+    rail_a = line_layer(rails, max(1, SS // 2), closed=False) * land_a
+
     river_rgb = np.array([150, 170, 190], np.float32) / 255.0
     base = base * (1 - 0.6 * river_a[..., None]) + river_rgb * 0.6 * river_a[..., None]
     coast_rgb = np.array([120, 130, 140], np.float32) / 255.0
     base = base * (1 - 0.55 * coast_a[..., None]) + coast_rgb * 0.55 * coast_a[..., None]
 
     res = dict(base=base.astype(np.float32), ids=ids.astype(np.uint8), land=land_a.astype(np.float32),
-               border=border_a.astype(np.float32))
+               border=border_a.astype(np.float32), rail=rail_a.astype(np.float32))
     np.savez_compressed(out, **res)
     return res
 

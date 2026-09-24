@@ -1018,3 +1018,18 @@ def as_day(s):
 
 def date_at(day_float):
     return START + timedelta(days=int(np.floor(day_float)))
+
+
+def _merge_romania_into_eastern_front():
+    """The Romanian front is shown as part of the Eastern Front: one army total per side."""
+    ef = next(f for f in FRONTS if f["name"] == "Eastern Front")
+    rf = next(f for f in FRONTS if f["name"] == "Romanian Front")
+    by_occ = {rf[s]["occ"]: lab for s in ("A", "B") for lab in rf["labels"] if lab["side"] == s}
+    for lab in ef["labels"]:
+        extra = by_occ.get(ef[lab["side"]]["occ"])
+        if extra:
+            lab["army"] = sum_series(lab["army"], extra["army"])
+    rf["labels"] = []
+
+
+_merge_romania_into_eastern_front()
