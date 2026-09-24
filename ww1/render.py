@@ -57,47 +57,37 @@ def pace_multiplier(day):
 
 
 class Schedule:
-    """Maps video time <-> calendar day, pausing the calendar while a speech plays."""
+    """Maps video time <-> calendar day. Speeches play in the background while the calendar
+    keeps running; each starts when its date is reached (or after the previous one ends)."""
 
     def __init__(self, speech_meta):
         self.speeches = []
         for s in T.SPEECHES:
             m = speech_meta[s["date"]]
-            self.speeches.append(dict(s, day=T.day_index(T.D(s["date"])) + 0.5, duration=m["duration"],
-                                      path=m["path"]))
-        hold = sum(s["duration"] + 2.5 for s in self.speeches)
+            day = min(T.day_index(T.D(s["date"])) + 0.3, END_DAY)
+            self.speeches.append(dict(s, day=day, duration=m["duration"], path=m["path"]))
         days = np.arange(int(math.ceil(END_DAY)))
         inv = sum(1.0 / pace_multiplier(d) for d in days)
-        main = TARGET_SECONDS - INTRO - OUTRO - hold
-        self.rate = inv / main  # days per second at multiplier 1
-        # build piecewise-linear (video_t, day) knots
+        self.rate = inv / (TARGET_SECONDS - INTRO - OUTRO)  # days per second at multiplier 1
         knots = [(0.0, 0.0), (INTRO, 0.0)]
         t, day = INTRO, 0.0
-        for s in self.speeches + [dict(day=END_DAY, duration=None)]:
-            while day < s["day"] - 1e-9:
-                step = min(1.0 - (day % 1.0), s["day"] - day)
-                t += step / (self.rate * pace_multiplier(day))
-                day += step
-                knots.append((t, day))
-            if s["duration"] is not None:
-                s["t0"] = t + 1.0
-                t += s["duration"] + 2.5
-                day += 0.3
-                knots.append((t, day))
+        while day < END_DAY - 1e-9:
+            step = min(1.0 - (day % 1.0), END_DAY - day)
+            t += step / (self.rate * pace_multiplier(day))
+            day += step
+            knots.append((t, day))
         self.main_end = t
         knots.append((t + OUTRO, day))
         self.total = t + OUTRO
         self.kt = np.array([k[0] for k in knots])
         self.kd = np.array([k[1] for k in knots])
+        free = 0.0
+        for s in self.speeches:
+            s["t0"] = max(float(np.interp(s["day"], self.kd[1:], self.kt[1:])), free)
+            free = s["t0"] + s["duration"] + 0.6
 
     def day(self, vt):
         return float(np.interp(vt, self.kt, self.kd))
-
-    def speech_at(self, vt):
-        for s in self.speeches:
-            if s["t0"] - 0.6 <= vt <= s["t0"] + s["duration"] + 0.6:
-                return s
-        return None
 
 
 # ----------------------------------------------------------------------------- renderer
@@ -403,50 +393,6 @@ class Renderer:
             d.rectangle([lx, yy + 2 * s, lx + 14 * s, yy + 14 * s], fill=c + (230,), outline=(40, 40, 40, 120))
             d.text((lx + 20 * s, yy), name, font=f, fill=(25, 25, 25))
 
-    def draw_speech(self, img, sp, vt):
-        s, W, H = self.s, self.W, self.H
-        t0, t1 = sp["t0"], sp["t0"] + sp["duration"]
-        a = min(1.0, (vt - (t0 - 0.6)) / 0.5, ((t1 + 0.6) - vt) / 0.5)
-        if a <= 0:
-            return
-        ov = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        d = ImageDraw.Draw(ov)
-        f_name = self.font("OpenSans-Bold.ttf", 18 * s)
-        f_role = self.font("OpenSans-Italic.ttf", 12 * s)
-        f_txt = self.font("OpenSans-SemiBold.ttf", 16 * s)
-        maxw = W * 0.56
-        words, lines, cur = sp["text"].split(), [], ""
-        for w in words:
-            trial = (cur + " " + w).strip()
-            if d.textlength("“" + trial + "”", font=f_txt) > maxw and cur:
-                lines.append(cur)
-                cur = w
-            else:
-                cur = trial
-        lines.append(cur)
-        lines[0] = "“" + lines[0]
-        lines[-1] = lines[-1] + "”"
-        lh = 22 * s
-        bw = maxw + 40 * s
-        bh = 56 * s + lh * len(lines)
-        bx, by = (W - bw) / 2, H - 58 * s - bh
-        d.rounded_rectangle([bx, by, bx + bw, by + bh], radius=8 * s, fill=(18, 20, 24, int(215 * a)))
-        d.text((bx + 20 * s, by + 10 * s), sp["speaker"], font=f_name, fill=(255, 255, 255, int(255 * a)))
-        d.text((bx + 20 * s, by + 34 * s), sp["role"] + "  •  " + T.D(sp["date"]).strftime("%-d %B %Y"),
-               font=f_role, fill=(200, 205, 215, int(255 * a)))
-        # reveal the quote progressively
-        prog = min(1.0, max(0.0, (vt - t0) / max(sp["duration"] * 0.92, 1e-6)))
-        total = sum(len(l) for l in lines)
-        shown = prog * total
-        for i, l in enumerate(lines):
-            yy = by + 52 * s + i * lh
-            d.text((bx + 20 * s, yy), l, font=f_txt, fill=(150, 150, 150, int(255 * a)))
-            n = int(min(len(l), max(0, shown)))
-            if n > 0:
-                d.text((bx + 20 * s, yy), l[:n], font=f_txt, fill=(255, 255, 255, int(255 * a)))
-            shown -= len(l)
-        img.alpha_composite(ov)
-
     def draw_intro(self, img, vt):
         s, W, H = self.s, self.W, self.H
         a = 1.0 if vt < INTRO - 1.2 else max(0.0, (INTRO - vt) / 1.2)
@@ -507,9 +453,6 @@ class Renderer:
         self.draw_army_labels(img, day)
         self.draw_markers(img, day, vt)
         self.draw_hud(img, day, vt, sched)
-        sp = sched.speech_at(vt)
-        if sp:
-            self.draw_speech(img, sp, vt)
         if vt < INTRO:
             self.draw_intro(img, vt)
         if vt > sched.main_end:
