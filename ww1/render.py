@@ -24,7 +24,7 @@ import timeline as T
 HERE = os.path.dirname(os.path.abspath(__file__))
 BUILD = os.path.join(HERE, "build")
 FONTS = os.path.join(HERE, "assets", "fonts")
-FPS = 25
+FPS = 30
 TARGET_SECONDS = 600.0
 INTRO = 8.0
 OUTRO = 22.0
@@ -162,21 +162,28 @@ class Renderer:
                 hint = [(T.as_day(d), self.P([p])[0]) for d, p in lab["hint"]]
                 army = [(T.as_day(d), v) for d, v in lab["army"]]
                 labels.append(dict(side=lab["side"], hint=hint, army=army, seed=len(labels) * 7 + len(self.fronts)))
-            self.fronts.append(dict(name=f["name"], keys=keys, sides=sides, labels=labels))
+            from scipy.interpolate import PchipInterpolator
+            days = np.array([k[0] for k in keys], float)
+            interp = PchipInterpolator(days, np.stack([k[1] for k in keys]), axis=0)
+            winding = {}
+            for s in ("A", "B"):  # orientation of each side's polygon, fixed from the first keyframe
+                poly = np.concatenate([keys[0][1], sides[s]["rear"]])
+                winding[s] = np.sign(np.sum(poly[:, 0] * np.roll(poly[:, 1], -1) - np.roll(poly[:, 0], -1) * poly[:, 1]))
+            self.fronts.append(dict(name=f["name"], keys=keys, sides=sides, labels=labels, interp=interp,
+                                    winding=winding))
         self.static = []
         for z in T.STATIC_ZONES:
             self.static.append(dict(z, poly_px=self.P(z["poly"]), a=T.as_day(z["start"]), b=T.as_day(z["end"])))
 
     def front_line(self, fr, day):
+        """Front line at a (fractional) day: monotone cubic interpolation between keyframes,
+        so fronts accelerate and decelerate smoothly instead of stopping at every keyframe."""
         keys = fr["keys"]
         if day <= keys[0][0]:
             return keys[0][1], day >= keys[0][0] - 0.5
-        for (d0, l0), (d1, l1) in zip(keys, keys[1:]):
-            if day <= d1:
-                u = (day - d0) / max(d1 - d0, 1e-9)
-                u = u * u * (3 - 2 * u)
-                return l0 + (l1 - l0) * u, True
-        return keys[-1][1], True
+        if day >= keys[-1][0]:
+            return keys[-1][1], True
+        return fr["interp"](day), True
 
     def poly_mask(self, poly, bbox):
         """Anti-aliased polygon coverage restricted to bbox (x0,y0,x1,y1) at 1x."""
@@ -277,13 +284,13 @@ class Renderer:
 
     # -- overlays -------------------------------------------------------------------------------
     def army_value(self, lab, day):
-        d = math.floor(day)
-        v = T.interp_series(lab["army"], d, ease=False)
+        """Army size at a fractional day. Continuous, so the counter rolls every frame."""
+        v = float(np.interp(day, [d for d, _ in lab["army"]], [x for _, x in lab["army"]]))
         if v <= 0:
             return 0
         seed = lab["seed"]
-        jitter = 1 + 0.004 * math.sin(d * 0.61 + seed) + 0.0025 * math.sin(d * 2.3 + seed * 3) + \
-            0.0015 * math.sin(d * 7.1 + seed * 5)
+        jitter = 1 + 0.004 * math.sin(day * 0.61 + seed) + 0.0025 * math.sin(day * 2.3 + seed * 3) + \
+            0.0015 * math.sin(day * 7.1 + seed * 5)
         return int(v * jitter)
 
     def draw_rotated_text(self, img, text, cx, cy, angle, size, alpha=1.0):
@@ -313,26 +320,38 @@ class Renderer:
                 alpha = min(1.0, (day - first + 0.5) / 3.0)
                 if alpha <= 0:
                     continue
-                hint = np.array([T.interp_series([(d, p[0]) for d, p in lab["hint"]], day),
-                                 T.interp_series([(d, p[1]) for d, p in lab["hint"]], day)])
-                i = int(np.argmin(((line - hint) ** 2).sum(1)))
-                i = min(max(i, 12), len(line) - 13)
-                tan = line[i + 12] - line[i - 12]
-                nrm = np.array([-tan[1], tan[0]])
-                nrm /= (np.linalg.norm(nrm) + 1e-9)
-                side_poly = Polygon(np.concatenate([line, fr["sides"]["A"]["rear"]]))
-                off = 19 * s
-                p1 = line[i] + nrm * off
-                inA = side_poly.contains(Point(*p1))
-                if (lab["side"] == "A") != inA:
-                    p1 = line[i] - nrm * off
-                ang = -math.degrees(math.atan2(tan[1], tan[0]))
-                if ang > 90:
-                    ang -= 180
-                if ang < -90:
-                    ang += 180
+                p1, ang = self.label_pose(fr, lab, day)
                 txt = f"{v:,}".replace(",", ".")
                 self.draw_rotated_text(img, txt, p1[0], p1[1], ang, 17 * s, alpha)
+
+    def label_pose(self, fr, lab, day):
+        """Position/angle of an army label, averaged over +-3 days so it glides instead of jumping."""
+        offs = np.linspace(-3.0, 3.0, 13)
+        wts = np.exp(-0.5 * (offs / 1.5) ** 2)
+        sign = fr["winding"][lab["side"]]
+        pos, dirs = [], []
+        for dd in offs:
+            d = day + dd
+            line, _ = self.front_line(fr, d)
+            hint = np.array([T.interp_series([(k, p[0]) for k, p in lab["hint"]], d),
+                             T.interp_series([(k, p[1]) for k, p in lab["hint"]], d)])
+            i = int(np.argmin(((line - hint) ** 2).sum(1)))
+            i = min(max(i, 25), len(line) - 26)
+            tan = line[i + 25] - line[i - 25]
+            tan = tan / (np.linalg.norm(tan) + 1e-9)
+            # the side's territory lies left of the direction of travel when its polygon winds CCW
+            nrm = np.array([-tan[1], tan[0]]) * sign
+            pos.append(line[i] + nrm * 19 * self.s)
+            th = math.atan2(tan[1], tan[0])
+            dirs.append((math.cos(2 * th), math.sin(2 * th)))  # orientation modulo 180 degrees
+        p1 = np.average(pos, axis=0, weights=wts)
+        c, s2 = np.average(dirs, axis=0, weights=wts)
+        ang = -math.degrees(0.5 * math.atan2(s2, c))
+        if ang > 90:
+            ang -= 180
+        if ang < -90:
+            ang += 180
+        return p1, ang
 
     def draw_markers(self, img, day, vt):
         s = self.s
