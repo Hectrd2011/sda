@@ -330,7 +330,7 @@ class Renderer:
         return fac
 
     # Newly taken ground is shown in a light tint that darkens into the occupier's colour.
-    RECENCY = [(0.6, 1.0), (1.4, 0.7), (2.8, 0.42), (5.0, 0.2)]
+    RECENCY = [(0.3, 1.0), (0.7, 0.55), (1.2, 0.25)]  # a narrow, short-lived band behind the front
 
     def capture_light(self, day, lut_f):
         lo = self.lo
@@ -343,7 +343,6 @@ class Renderer:
             light = np.maximum(light, changed * np.float32(w))
         if not light.any():
             return None
-        light = ndimage.gaussian_filter(light, 0.6)
         ys, xs = np.nonzero(light > 0.01)
         if len(ys) == 0:
             return None
@@ -383,9 +382,9 @@ class Renderer:
             got = self.capture_light(day, lut_f)
             if got is not None:  # freshly captured land: whitish, fading into the occupier's colour
                 lt, (x0, y0, x1, y1) = got
-                k = (0.8 * lt)[..., None]
+                k = (0.6 * lt)[..., None]  # a light version of the new owner's colour
                 sl = (slice(y0, y1), slice(x0, x1))
-                out[sl] = out[sl] * (1 - k) + np.float32(0.96) * k
+                out[sl] = out[sl] * (1 - k) + np.float32(0.97) * k
         mul, add = self._static_overlay()
         out *= mul
         out += add
