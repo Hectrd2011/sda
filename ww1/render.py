@@ -157,6 +157,20 @@ class Renderer:
             from scipy.interpolate import PchipInterpolator
             days = np.array([k[0] for k in keys], float)
             interp = PchipInterpolator(days, np.stack([k[1] for k in keys]), axis=0)
+            for lab in labels:
+                ts = []
+                for kd, kl in keys:
+                    hint = np.array([T.interp_series([(k, p[0]) for k, p in lab["hint"]], kd),
+                                     T.interp_series([(k, p[1]) for k, p in lab["hint"]], kd)])
+                    i = int(np.argmin(((kl - hint) ** 2).sum(1)))
+                    i = min(max(i, 60), len(kl) - 61)
+                    t = kl[i + 60] - kl[i - 60]
+                    t = t / (np.linalg.norm(t) + 1e-9)
+                    ts.append(t if not ts or np.dot(t, ts[0]) >= 0 else -t)
+                ref = np.mean(ts, 0)
+                if ref[0] < 0:  # read left-to-right (or top-to-bottom for vertical fronts)
+                    ref = -ref
+                lab["refdir"] = ref / (np.linalg.norm(ref) + 1e-9)
             winding = {}
             for s in ("A", "B"):  # orientation of each side's polygon, fixed from the first keyframe
                 poly = np.concatenate([keys[0][1], sides[s]["rear"]])
@@ -334,8 +348,14 @@ class Renderer:
         t = Image.alpha_composite(Image.new("RGBA", (w, h), (0, 0, 0, 0)),
                                   Image.merge("RGBA", (*Image.new("RGB", (w, h), (20, 20, 20)).split(), sh)))
         ImageDraw.Draw(t).text((pad - bb[0], pad - bb[1]), text, font=f, fill=(255, 255, 255, int(255 * alpha)))
-        r = t.rotate(angle, resample=Image.BICUBIC, expand=True)
-        img.alpha_composite(r, (int(cx - r.width / 2), int(cy - r.height / 2)))
+        r0 = t.rotate(angle, resample=Image.BICUBIC, expand=True)
+        x, y = cx - r0.width / 2, cy - r0.height / 2
+        ix, iy = math.floor(x), math.floor(y)
+        # shift by the fractional part so labels glide smoothly instead of stepping pixel by pixel
+        r = r0.transform(r0.size, Image.AFFINE, (1, 0, -(x - ix), 0, 1, -(y - iy)), resample=Image.BILINEAR)
+        cx0, cy0 = max(0, -ix), max(0, -iy)  # alpha_composite needs a non-negative destination
+        if cx0 < r.width and cy0 < r.height:
+            img.alpha_composite(r.crop((cx0, cy0, r.width, r.height)), (ix + cx0, iy + cy0))
 
     def draw_army_labels(self, img, day):
         s = self.s
@@ -357,9 +377,10 @@ class Renderer:
                 self.draw_rotated_text(img, txt, p1[0], p1[1], ang, 16 * s, alpha)
 
     def label_pose(self, fr, lab, day):
-        """Position/angle of an army label, averaged over +-3 days so it glides instead of jumping."""
-        offs = np.linspace(-3.0, 3.0, 13)
-        wts = np.exp(-0.5 * (offs / 1.5) ** 2)
+        """Position/angle of an army label. Smoothed over +-6 days and aimed along a long chord of
+        the front, with a fixed reading direction per label so the text never flips."""
+        offs = np.linspace(-6.0, 6.0, 13)
+        wts = np.exp(-0.5 * (offs / 3.0) ** 2)
         sign = fr["winding"][lab["side"]]
         pos, dirs = [], []
         for dd in offs:
@@ -367,23 +388,21 @@ class Renderer:
             line, _ = self.front_line(fr, d)
             hint = np.array([T.interp_series([(k, p[0]) for k, p in lab["hint"]], d),
                              T.interp_series([(k, p[1]) for k, p in lab["hint"]], d)])
-            i = int(np.argmin(((line - hint) ** 2).sum(1)))
-            i = min(max(i, 25), len(line) - 26)
-            tan = line[i + 25] - line[i - 25]
-            tan = tan / (np.linalg.norm(tan) + 1e-9)
-            # the side's territory lies left of the direction of travel when its polygon winds CCW
-            nrm = np.array([-tan[1], tan[0]]) * sign
-            pos.append(line[i] + nrm * 12 * self.s)
-            th = math.atan2(tan[1], tan[0])
-            dirs.append((math.cos(2 * th), math.sin(2 * th)))  # orientation modulo 180 degrees
+            # soft anchor: blend every line point by closeness to the hint, so the anchor slides
+            # continuously instead of hopping between segments of a jagged line
+            d2 = ((line - hint) ** 2).sum(1)
+            sig = 28.0 * self.s
+            w = np.exp(-(d2 - d2.min()) / (2 * sig * sig))
+            idx = np.arange(len(line))
+            tan = line[np.minimum(idx + 60, len(line) - 1)] - line[np.maximum(idx - 60, 0)]
+            tan /= (np.linalg.norm(tan, axis=1, keepdims=True) + 1e-9)
+            nrm = np.stack([-tan[:, 1], tan[:, 0]], 1) * sign  # side's territory is left of travel
+            pos.append((w[:, None] * (line + nrm * 12 * self.s)).sum(0) / w.sum())
+            tan = np.where((tan @ lab["refdir"])[:, None] >= 0, tan, -tan)
+            dirs.append((w[:, None] * tan).sum(0) / w.sum())
         p1 = np.average(pos, axis=0, weights=wts)
-        c, s2 = np.average(dirs, axis=0, weights=wts)
-        ang = -math.degrees(0.5 * math.atan2(s2, c))
-        if ang > 90:
-            ang -= 180
-        if ang < -90:
-            ang += 180
-        return p1, ang
+        t = np.average(dirs, axis=0, weights=wts)
+        return p1, -math.degrees(math.atan2(t[1], t[0]))
 
     def draw_markers(self, img, day, vt):
         s = self.s
