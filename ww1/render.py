@@ -13,7 +13,7 @@ import sys
 from datetime import timedelta
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from scipy import ndimage
 from shapely.geometry import Point, Polygon
 
@@ -92,7 +92,7 @@ class Schedule:
 
 # ----------------------------------------------------------------------------- renderer
 class Renderer:
-    def __init__(self, W, H):
+    def __init__(self, W, H, lite=False):
         self.W, self.H = W, H
         self.s = W / 1280.0
         self.fr = bm.Frame(W, H)
@@ -110,6 +110,8 @@ class Renderer:
         self.alliance = {k: [(T.as_day(d), f) for d, f in v] for k, v in T.ALLIANCES.items()}
         self.events = [(T.as_day(d), txt) for d, txt in T.EVENTS]
         self.markers = [(txt, *self.fr.px(lo, la), T.as_day(a), T.as_day(b) + 1) for txt, lo, la, a, b in T.MARKERS]
+        # half-resolution twin used to work out how recently each pixel changed hands
+        self.lo = None if lite else Renderer(W // 2, H // 2, lite=True)
 
     # -- helpers -------------------------------------------------------------------------------
     def font(self, name, size):
@@ -200,8 +202,7 @@ class Renderer:
         return f, since
 
     # -- map layer ----------------------------------------------------------------------------
-    def map_layer(self, day):
-        W, H = self.W, self.H
+    def alliance_luts(self, day):
         lut_c = np.zeros((256, 3), np.float32)
         lut_a = np.zeros(256, np.float32)
         lut_f = np.zeros(256, np.uint8)
@@ -221,24 +222,16 @@ class Renderer:
             lut_c[idx] = cp[0] * (1 - fade) + ca[0] * fade
             lut_a[idx] = cp[1] * (1 - fade) + ca[1] * fade
             lut_f[idx] = self.fac_code[fac] if fade > 0.5 else self.fac_code[prev]
-        col = lut_c[self.ids]
-        a = lut_a[self.ids] * self.land
-        fac = lut_f[self.ids]
+        return lut_c, lut_a, lut_f
 
-        def paint(mask, occ, bbox):
-            x0, y0, x1, y1 = bbox
-            c = np.array(T.FACTIONS[occ][0], np.float32) / 255
-            al = T.FACTIONS[occ][1]
-            sl = (slice(y0, y1), slice(x0, x1))
-            col[sl] = col[sl] * (1 - mask[..., None]) + c * mask[..., None]
-            a[sl] = a[sl] * (1 - mask) + al * mask
-            fac[sl] = np.where(mask > 0.5, self.fac_code[occ], fac[sl])
-
+    def zones(self, day, set_line=False):
+        """Yield (mask, occupier, bbox) for every occupied area at a (fractional) day."""
         for fr in self.fronts:
             line, active = self.front_line(fr, day)
             if not active:
                 continue
-            fr["_line"] = line
+            if set_line:
+                fr["_line"] = line
             for s in ("A", "B"):
                 sd = fr["sides"][s]
                 if not sd["victims"]:
@@ -251,14 +244,57 @@ class Renderer:
                 if sd["until"] is not None:
                     m = m * min(1.0, max(0.0, (sd["until"] + 3.0 - day) / 3.0))
                 if m.max() > 0.01:
-                    paint(m, sd["occ"], bbox)
+                    yield m, sd["occ"], bbox
         for z in self.static:
             if z["a"] <= day < z["b"]:
                 vm, bbox = self.victim_mask(z["victims"], day)
-                m = self.poly_mask(z["poly_px"], bbox) * vm[bbox[1]:bbox[3], bbox[0]:bbox[2]]
-                paint(m, z["occ"], bbox)
+                yield self.poly_mask(z["poly_px"], bbox) * vm[bbox[1]:bbox[3], bbox[0]:bbox[2]], z["occ"], bbox
+
+    def zone_codes(self, day, base):
+        fac = base.copy()
+        for m, occ, (x0, y0, x1, y1) in self.zones(day):
+            sl = (slice(y0, y1), slice(x0, x1))
+            fac[sl] = np.where(m > 0.5, self.fac_code[occ], fac[sl])
+        return fac
+
+    # Newly taken ground is shown in a light tint that darkens into the occupier's colour.
+    RECENCY = [(0.6, 1.0), (1.4, 0.7), (2.8, 0.42), (5.0, 0.2)]
+
+    def capture_light(self, day, lut_f):
+        lo = self.lo
+        base = lut_f[lo.ids]
+        now = lo.zone_codes(day, base)
+        light = np.zeros(now.shape, np.float32)
+        for d, w in self.RECENCY:
+            past = lo.zone_codes(day - d, base)
+            changed = (past != now) & (now > 0)
+            light = np.maximum(light, changed * np.float32(w))
+        if not light.any():
+            return None
+        light = ndimage.gaussian_filter(light, 0.6)
+        return np.asarray(Image.fromarray(light).resize((self.W, self.H), Image.BILINEAR), np.float32) * self.land
+
+    def map_layer(self, day):
+        W, H = self.W, self.H
+        lut_c, lut_a, lut_f = self.alliance_luts(day)
+        col = lut_c[self.ids]
+        a = lut_a[self.ids] * self.land
+        fac = lut_f[self.ids]
+
+        for m, occ, (x0, y0, x1, y1) in self.zones(day, set_line=True):
+            c = np.array(T.FACTIONS[occ][0], np.float32) / 255
+            al = T.FACTIONS[occ][1]
+            sl = (slice(y0, y1), slice(x0, x1))
+            col[sl] = col[sl] * (1 - m[..., None]) + c * m[..., None]
+            a[sl] = a[sl] * (1 - m) + al * m
+            fac[sl] = np.where(m > 0.5, self.fac_code[occ], fac[sl])
 
         out = self.base * (1 - a[..., None]) + col * a[..., None]
+        if self.lo is not None:
+            lt = self.capture_light(day, lut_f)
+            if lt is not None:  # freshly captured land: whitish, fading into the occupier's colour
+                k = (0.8 * lt)[..., None]
+                out = out * (1 - k) + np.float32(0.96) * k
         # borders (pink, like old atlas maps)
         b = self.border[..., None] * 0.55
         out = out * (1 - b) + np.array([0.86, 0.45, 0.5], np.float32) * b
@@ -284,14 +320,20 @@ class Renderer:
         return int(v * jitter)
 
     def draw_rotated_text(self, img, text, cx, cy, angle, size, alpha=1.0):
+        """White number with a soft drop shadow, rotated to follow the front."""
         s = self.s
         f = self.font("OpenSans-Bold.ttf", size)
-        bb = f.getbbox(text, stroke_width=max(1, int(1.6 * s)))
-        w, h = bb[2] - bb[0] + 8, bb[3] - bb[1] + 8
+        bb = f.getbbox(text)
+        pad = int(6 * s)
+        w, h = bb[2] - bb[0] + 2 * pad, bb[3] - bb[1] + 2 * pad
+        sh = Image.new("L", (w, h), 0)
+        ImageDraw.Draw(sh).text((pad - bb[0] + s, pad - bb[1] + s), text, font=f, fill=int(200 * alpha))
+        sh = sh.filter(ImageFilter.GaussianBlur(1.6 * s))
         t = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        d = ImageDraw.Draw(t)
-        d.text((4 - bb[0], 4 - bb[1]), text, font=f, fill=(255, 255, 255, int(255 * alpha)),
-               stroke_width=max(1, int(1.6 * s)), stroke_fill=(40, 40, 40, int(150 * alpha)))
+        t.putalpha(sh)
+        t = Image.alpha_composite(Image.new("RGBA", (w, h), (0, 0, 0, 0)),
+                                  Image.merge("RGBA", (*Image.new("RGB", (w, h), (20, 20, 20)).split(), sh)))
+        ImageDraw.Draw(t).text((pad - bb[0], pad - bb[1]), text, font=f, fill=(255, 255, 255, int(255 * alpha)))
         r = t.rotate(angle, resample=Image.BICUBIC, expand=True)
         img.alpha_composite(r, (int(cx - r.width / 2), int(cy - r.height / 2)))
 
@@ -312,7 +354,7 @@ class Renderer:
                     continue
                 p1, ang = self.label_pose(fr, lab, day)
                 txt = f"{v:,}".replace(",", ".")
-                self.draw_rotated_text(img, txt, p1[0], p1[1], ang, 17 * s, alpha)
+                self.draw_rotated_text(img, txt, p1[0], p1[1], ang, 16 * s, alpha)
 
     def label_pose(self, fr, lab, day):
         """Position/angle of an army label, averaged over +-3 days so it glides instead of jumping."""
@@ -331,7 +373,7 @@ class Renderer:
             tan = tan / (np.linalg.norm(tan) + 1e-9)
             # the side's territory lies left of the direction of travel when its polygon winds CCW
             nrm = np.array([-tan[1], tan[0]]) * sign
-            pos.append(line[i] + nrm * 19 * self.s)
+            pos.append(line[i] + nrm * 12 * self.s)
             th = math.atan2(tan[1], tan[0])
             dirs.append((math.cos(2 * th), math.sin(2 * th)))  # orientation modulo 180 degrees
         p1 = np.average(pos, axis=0, weights=wts)
