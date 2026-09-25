@@ -323,7 +323,7 @@ class Renderer:
         return int(v * j)
 
     def number_size(self, v):
-        return min(14.0, 9.0 + 5.0 * math.sqrt(v / 200_000)) * self.s
+        return min(22.0, 14.0 + 8.0 * math.sqrt(v / 100_000)) * self.s
 
     def draw_text_shadow(self, img, text, cx, cy, size, alpha=1.0, font="LiberationSans-Bold.ttf"):
         s = self.s

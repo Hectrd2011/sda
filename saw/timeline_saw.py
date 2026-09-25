@@ -156,6 +156,13 @@ ZONES = [
          keys=[("1900-03-31", 124.65, 8.48, 0.05, 0.05), ("1900-06-01", 124.8, 8.6, 0.8, 0.35)]),
     dict(name="US Jolo", panel="philippines", kind="ellipse", occ="US", victims=["PHL"],
          start="1899-05-19", end="1902-07-05", keys=[("1899-05-19", 121.0, 6.05, 0.12, 0.1)]),
+    # by early 1900 the US had landed on Mindoro, Masbate, Romblon, Marinduque and Palawan and garrisoned the
+    # coasts; everything north of Mindanao and Sulu that isn't a guerrilla pocket (below) is US-held from then on
+    dict(name="US garrisons across the islands", panel="philippines", kind="poly", occ="US", victims=["PHL"],
+         start="1900-03-01", end="1902-07-05",
+         keys=[("1900-03-01", [(116.0, 21.8), (127.5, 21.8), (127.5, 8.7), (125.45, 8.7), (125.3, 9.3),
+                               (125.0, 9.85), (124.2, 9.45), (123.2, 9.0), (122.2, 9.0), (120.5, 8.9),
+                               (119.0, 8.4), (117.9, 7.6), (116.0, 7.6)])]),
     # ------------------------------------------------------------------ guerrilla war (Filipino pockets)
     dict(name="Aguinaldo's retreat to Palanan", panel="philippines", kind="ellipse", occ="FIL", victims=["PHL"],
          start="1899-11-13", end="1901-03-24",
