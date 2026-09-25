@@ -13,7 +13,7 @@ The chapter times come from the videos' own timelines, so they match the videos 
 | Thumbnail | the matching `*_thumbnail.jpg` |
 | Playlist | make one called **"Every Day with Army Sizes"** and add every video |
 | Audience | **No, it's not made for kids** |
-| Altered or synthetic content | **Yes**. The speeches are real quotations read by an AI voice. |
+| Altered or synthetic content | **Yes** for videos 1–5 (real quotations read by an AI voice); **No** for the Russia–Ukraine video (original recordings) |
 | Category | **Education** |
 | Language | English |
 | Captions | leave the automatic ones |
@@ -28,6 +28,56 @@ just upload the 1080p file, which already looks sharp.
 **Copyright:** the 1898 Puerto Rico video uses *La Marcha Real* and *Die Toten Erwachen* from other
 people's uploads. It may get a copyright claim. That usually only means the ad money goes to the owner,
 and the video stays up. If you'd rather avoid that, ask for the synthesized-band version.
+
+---
+
+## Step by step: uploading from your phone
+
+Do this in the **YouTube** app, then finish in the **YouTube Studio** app, which is free. Chapters, tags and the
+"altered content" question are easier in Studio.
+
+1. Get the video onto your phone. In this chat, tap the video file and save it to Photos. For the full-quality
+   file, open the repo on GitHub, tap the `_1080p.mp4` file, then **View raw** / **Download**.
+2. Save the thumbnail (`*_thumbnail.jpg`) to Photos the same way.
+3. In the YouTube app, tap **+**, then **Video**, and pick the video.
+4. **Title:** paste the title from this guide.
+5. **Description:** tap it and paste the whole description block from this guide, chapters included.
+6. **Visibility:** choose **Unlisted** for now.
+7. **Audience:** "No, it's not made for kids".
+8. Tap **Upload** and wait until it says processing is finished (HD can take 10–30 minutes).
+9. Open **YouTube Studio**, then **Content**, and tap the new video, then the pencil icon to edit:
+   - **Thumbnail:** tap it, then choose the saved `*_thumbnail.jpg`.
+   - **Tags** (under "Show more"): paste the tags line.
+   - **Altered or synthetic content:** use the answer listed for that video below.
+   - **Category:** Education.
+   - **Playlist:** "Every Day with Army Sizes". Create it the first time.
+   - Save.
+10. Watch it once, all the way through, as Unlisted. Check that the chapters show under the video and the sound is fine.
+11. Check **Studio, Content, Restrictions**. "Copyright claim" is normal for the videos with game or band music:
+    the video stays up and the ads money goes to the music owner. Don't dispute it.
+12. Set a **publish time:** Studio, Visibility, **Schedule**, and pick the date and time from the schedule below.
+13. When it goes live, post a comment and **pin** it:
+    `Which war should I map next? 👇`
+14. Share the link in places where map fans hang out, such as r/MapPorn or r/europe for the WW1 and Ukraine
+    videos, and Puerto Rico groups for the PR videos. Don't spam the same link everywhere on the same day.
+
+---
+
+## Posting schedule (your local time, around 3 pm is good)
+
+| Date | Video | Why |
+|---|---|---|
+| Sat 26 Sep 2026 | **6. Russia–Ukraine War** | biggest search topic right now; post it first |
+| Sat 3 Oct | **1. WW1 – Europe** | |
+| Sat 10 Oct | **5. 1898 Puerto Rican Campaign** | |
+| Sat 17 Oct | **3. Spanish–American War (new version)** | replaces the old upload, see below |
+| Sat 24 Oct | **2. WW1 – World** | |
+| **Fri 30 Oct** | **4. 1950 Nationalist uprisings** | the anniversary of the Jayuya uprising (30 Oct 1950) |
+
+After that, one video a week on the same day and time. YouTube rewards channels that post regularly.
+
+**Replacing the Spanish–American War upload:** once the new version with bigger numbers is ready, upload it
+as a new video. Then set the old one to **Private**, or delete it. With a handful of views you lose nothing.
 
 ---
 
@@ -251,13 +301,61 @@ puerto rico, puerto rican campaign, 1898, spanish american war, invasion of puer
 
 ---
 
-## Upload order
+## 6. Russia–Ukraine War (2022–2026)
 
-1. **WW1 Europe** – the biggest search topic
-2. **WW1 World** – a week later
-3. **1898 Puerto Rican Campaign**
-4. **Spanish–American War**
-5. **1950 Nationalist uprisings**
+**Title**
+```
+Russia's Invasion of Ukraine: Every Day with Troop Numbers (2022–2026)
+```
 
-One video a week keeps the channel active. After each upload, pin a comment asking which war
-people want next – it helps you pick videos and brings more comments.
+**Description**
+```
+The Russian invasion of Ukraine every day from 24 February 2022 to September 2026 – the front line, the occupied territory and the number of troops on each side.
+
+From the battle for Kyiv and the fall of Mariupol to the Kharkiv and Kherson counteroffensives, Bakhmut, the Kursk incursion, Pokrovsk and the fighting of 2026.
+
+⏱ Chapters
+0:00 The invasion begins
+0:09 The battle for Kyiv
+0:42 Russia withdraws from the north – Bucha
+1:07 The fall of Mariupol
+1:19 The battle for the Donbas
+1:42 The Kharkiv counteroffensive
+2:08 Kherson is liberated
+2:29 Soledar & Bakhmut
+3:13 The Kakhovka dam & the 2023 counteroffensive
+4:34 Avdiivka
+4:55 US aid & the Kharkiv offensive
+5:28 Ukraine invades Kursk
+6:01 North Korean troops arrive
+6:38 The Oval Office clash & the fall of the Kursk salient
+7:07 Operation Spiderweb
+7:31 The Alaska summit
+8:00 The battle for Pokrovsk
+8:23 Ukraine's 2026 counteroffensive
+9:04 The Kramatorsk fortress belt
+9:38 The war so far
+
+📌 Notes
+• Troop numbers are rounded estimates of the forces committed along each front, based on published estimates; the real numbers are uncertain and disputed.
+• Front lines are simplified to what is visible at this scale, based on daily situation maps.
+• Speeches are the original recordings: Vladimir Putin (24 Feb 2022), Volodymyr Zelenskyy (Feb 2022 and his address to the US Congress, Dec 2022) and Joe Biden in Warsaw (Feb 2023).
+• Music: GosT – Behemoth (Perturbator remix); Hearts of Iron IV – Katyusha; Hearts of Iron III – Well Oiled War Machine; Hearts of Iron IV – The End of the War.
+• Map data: Natural Earth; elevation: AWS Terrain Tiles.
+
+Which war should I map next? Tell me in the comments 👇
+
+#ukraine #russia #maps
+```
+
+**Tags**
+```
+russia ukraine war, ukraine war map, war in ukraine, russian invasion of ukraine, every day, troop numbers, army sizes, every day with army sizes, map animation, ukraine front line, kharkiv counteroffensive, kherson, bakhmut, kursk, pokrovsk, zelensky, putin, 2022, 2026, history
+```
+
+**Settings for this video**
+- Altered or synthetic content: **No**. The speeches are the original recordings.
+- It will likely get **copyright claims** for the music (Paradox and GosT). The video stays up and the ad money goes to them.
+- YouTube often gives war videos **limited ads** (yellow $ icon). That's normal for this topic. Don't edit the video to fight it.
+
+---
