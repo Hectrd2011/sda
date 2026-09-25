@@ -28,7 +28,8 @@ FACTIONS = {
     "US": ((66, 110, 212), 0.62, "United States Army"),
     "ESP": ((196, 152, 44), 0.60, "Spanish Army and Volunteers"),
 }
-OWNERS = {"PRI": [("1898-05-10", "ESP"), ("1898-10-18 12:00", "US")]}
+OWNERS = {"PRI": [("1898-05-10", "ESP"), ("1898-10-18 06:00", "US")]}
+OWNER_FADE_DAYS = 0.5  # the whole island turns blue over the handover day
 
 P = {  # places (lon, lat)
     "Guanica": (-66.908, 17.972), "Seboruco": (-66.875, 18.0), "Yauco": (-66.85, 18.035),

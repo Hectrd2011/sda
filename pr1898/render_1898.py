@@ -287,7 +287,7 @@ class Panel:
             for d, o in hist:
                 if day >= d:
                     prev, cur, since = cur, o, d
-            fade = min(1.0, max(0.0, (day - since) / 2.0))
+            fade = min(1.0, max(0.0, (day - since) / getattr(T, 'OWNER_FADE_DAYS', 2.0)))
             ca = (np.array(T.FACTIONS[cur][0], np.float32) / 255, T.FACTIONS[cur][1]) if cur else (np.zeros(3), 0.0)
             cp = (np.array(T.FACTIONS[prev][0], np.float32) / 255, T.FACTIONS[prev][1]) if prev else (ca[0], 0.0)
             col[idx] = cp[0] * (1 - fade) + ca[0] * fade
