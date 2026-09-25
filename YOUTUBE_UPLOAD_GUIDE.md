@@ -68,16 +68,13 @@ Do this in the **YouTube** app, then finish in the **YouTube Studio** app, which
 | Date | Video | Why |
 |---|---|---|
 | Sat 26 Sep 2026 | **6. Russia–Ukraine War** | biggest search topic right now; post it first |
+| (already up) | **3. Spanish–American War** | |
 | Sat 3 Oct | **1. WW1 – Europe** | |
 | Sat 10 Oct | **5. 1898 Puerto Rican Campaign** | |
-| Sat 17 Oct | **3. Spanish–American War (new version)** | replaces the old upload, see below |
-| Sat 24 Oct | **2. WW1 – World** | |
+| Sat 17 Oct | **2. WW1 – World** | |
 | **Fri 30 Oct** | **4. 1950 Nationalist uprisings** | the anniversary of the Jayuya uprising (30 Oct 1950) |
 
 After that, one video a week on the same day and time. YouTube rewards channels that post regularly.
-
-**Replacing the Spanish–American War upload:** once the new version with bigger numbers is ready, upload it
-as a new video. Then set the old one to **Private**, or delete it. With a handful of views you lose nothing.
 
 ---
 
