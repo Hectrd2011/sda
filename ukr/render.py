@@ -735,7 +735,8 @@ def split_ranges(gaps, pieces):
 # music playlist: (file in build/real/music, start second) - played one after another, no crossfades
 MUSIC = [("01_behemoth.wav", 10.7),                   # GosT - Behemoth (Perturbator remix), after the spoken intro
          ("02_katyusha.wav", 93.0),                   # Hearts of Iron IV - Katyusha (full version), from 1:33
-         ("04_well_oiled_war_machine.wav", 0.0)]      # Hearts of Iron III - Well Oiled War Machine
+         ("04_well_oiled_war_machine.wav", 0.0),      # Hearts of Iron III - Well Oiled War Machine
+         ("05_end_of_the_war.wav", 146.3)]            # Hearts of Iron IV - The End of the War, last part to the finish
 
 
 def build_audio(sched, out_wav):
