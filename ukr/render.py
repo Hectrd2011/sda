@@ -829,7 +829,8 @@ def main():
         if not gaps:
             break
         todo = [(args.w, args.h, a, b, os.path.join(chunk_dir, f"chunk_{a:06d}_{b:06d}.mp4"), args.view)
-                for a, b in split_ranges(gaps, jobs)]
+                # short pieces, so a restarted container only loses a few minutes of work
+                for a, b in split_ranges(gaps, max(jobs, sum(b - a for a, b in gaps) // 450))]
         print(f"rendering {sum(t[3] - t[2] for t in todo)} frames in {len(todo)} pieces (attempt {attempt + 1})",
               flush=True)
         try:
