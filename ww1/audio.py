@@ -55,7 +55,7 @@ def make_speeches(speeches):
         from kokoro_onnx import Kokoro
         k = Kokoro(KOKORO_MODEL, KOKORO_VOICES)
         for i, s in enumerate(todo):
-            lang = "en-us" if s["voice"].startswith("a") else "en-gb"
+            lang = s.get("lang") or ("en-us" if s["voice"].startswith("a") else "en-gb")
             y, sr = k.create(s["text"], voice=s["voice"], speed=0.88, lang=lang)
             y = signal.resample_poly(y, SR, sr).astype(np.float32)
             y = gramophone(y, SR, seed=i)
