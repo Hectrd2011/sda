@@ -371,7 +371,8 @@ class Renderer:
         self.labels = []
         for i, lab in enumerate(T.LABELS):
             p = self.pan[lab.get("panel", "puertorico")]
-            self.labels.append(dict(lab, seed=i * 7 + 3,
+            side = "ESP" if "Spanish" in lab["name"] else "US"
+            self.labels.append(dict(lab, seed=i * 7 + 3, side=side,
                                     hint=[(T.as_day(d), np.array(p.fr.px(q[0], q[1]))) for d, q in lab["hint"]],
                                     army=[(T.as_day(d), v) for d, v in lab["army"]]))
         self.markers = [(txt, *self.pan["puertorico"].fr.px(lo, la), T.as_day(a), T.as_day(b))
@@ -402,7 +403,7 @@ class Renderer:
     def number_size(self, v):
         return min(15.0, 10.0 + 5.0 * math.sqrt(v / 17_000)) * self.s
 
-    def draw_text_shadow(self, img, text, cx, cy, size, alpha=1.0, font="LiberationSans-Bold.ttf"):
+    def draw_text_shadow(self, img, text, cx, cy, size, alpha=1.0, font="LiberationSans-Bold.ttf", angle=0.0):
         s = self.s
         f = self.font(font, size)
         bb = f.getbbox(text)
@@ -413,10 +414,143 @@ class Renderer:
         sh = sh.filter(ImageFilter.GaussianBlur(1.1 * s))
         t = Image.merge("RGBA", (*Image.new("RGB", (w, h), (20, 20, 20)).split(), sh))
         ImageDraw.Draw(t).text((pad - bb[0], pad - bb[1]), text, font=f, fill=(255, 255, 255, int(255 * alpha)))
+        if abs(angle) > 0.05:
+            t = t.rotate(angle, resample=Image.BICUBIC, expand=True)
+            w, h = t.size
         x, y = cx - w / 2, cy - h / 2
         ix, iy = math.floor(x), math.floor(y)
         t = t.transform(t.size, Image.AFFINE, (1, 0, -(x - ix), 0, 1, -(y - iy)), resample=Image.BILINEAR)
         img.alpha_composite(t, (max(0, ix), max(0, iy)))
+
+    # -- numbers that follow the front -------------------------------------------------------------
+    def front_codes(self, day):
+        """Control codes (US / Spanish) at a working resolution, cached per time."""
+        pan = self.pan["puertorico"]
+        src = pan.lo if pan.lo is not None else pan
+        key = round(day, 4)
+        cache = self.__dict__.setdefault("_codes_cache", {})
+        if key not in cache:
+            if len(cache) > 40:
+                cache.clear()
+            cache[key] = src.codes(day, src.owner_luts(day)[2])
+        return src, cache[key]
+
+    def label_pose(self, lab, day, hint, v=0, size=10.0):
+        """Anchor on the nearest stretch of front, offset into the label's own side, angle along the front
+        (capped at 45 degrees), averaged over +-8 hours so it glides."""
+        pan = self.pan["puertorico"]
+        own = CODES[lab["side"]]
+        other = CODES["ESP" if lab["side"] == "US" else "US"]
+        pts, dirs = [], []
+        for dd in (-12, -8, -4, 0, 4, 8, 12):
+            src, c = self.front_codes(day + dd / 24)
+            k = src.fr.pw / pan.fr.pw  # working px per output px
+            hx, hy = (hint[0] - pan.fr.px0) * k, hint[1] * k
+            b = np.zeros(c.shape, bool)
+            dx = ((c[:, 1:] == own) & (c[:, :-1] == other)) | ((c[:, 1:] == other) & (c[:, :-1] == own))
+            dy = ((c[1:, :] == own) & (c[:-1, :] == other)) | ((c[1:, :] == other) & (c[:-1, :] == own))
+            b[:, 1:] |= dx
+            b[1:, :] |= dy
+            ys, xs = np.nonzero(b)
+            if len(xs) == 0:
+                pts.append(tuple(hint)); dirs.append((1.0, 0.0))  # no front nearby: stay level at the hint
+                continue
+            d2 = (xs - hx) ** 2 + (ys - hy) ** 2
+            R = 130 * self.s * k
+            fb = float(np.clip((R - math.sqrt(d2.min())) / (0.5 * R), 0, 1))
+            fb = fb * fb * (3 - 2 * fb)  # how much the front "holds" the number (fades in as it approaches)
+            near = d2 < R * R
+            if near.sum() < 6 or fb <= 0:
+                pts.append(tuple(hint)); dirs.append((1.0, 0.0))
+                continue
+            xs, ys, d2 = xs[near].astype(float), ys[near].astype(float), d2[near]
+            sig = 22 * self.s * k
+            w = np.exp(-(d2 - d2.min()) / (2 * sig * sig))
+            ax, ay = (w * xs).sum() / w.sum(), (w * ys).sum() / w.sum()
+            # direction of the front: main axis of the boundary pixels around the anchor
+            w2 = np.exp(-((xs - ax) ** 2 + (ys - ay) ** 2) / (2 * (2.2 * sig) ** 2))
+            cx, cy = xs - ax, ys - ay
+            cov = np.array([[(w2 * cx * cx).sum(), (w2 * cx * cy).sum()], [(w2 * cx * cy).sum(), (w2 * cy * cy).sum()]])
+            ev, evec = np.linalg.eigh(cov)
+            t = evec[:, 1]
+            if t[0] < 0:
+                t = -t
+            n = np.array([-t[1], t[0]])
+            # point the normal into the label's own territory
+            px_, py_ = int(round(ax + n[0] * 6 * k * self.s)), int(round(ay + n[1] * 6 * k * self.s))
+            px_, py_ = min(max(px_, 0), c.shape[1] - 1), min(max(py_, 0), c.shape[0] - 1)
+            if c[py_, px_] != own:
+                n = -n
+            th = math.atan2(t[1], t[0])
+            front = -math.degrees(th)
+            if front > 90:
+                front -= 180
+            elif front < -90:
+                front += 180
+            ang = 45.0 * math.tanh(front / 45.0)
+            # find the spot nearest the front where the whole (tilted) number lies in its own territory,
+            # clear of town names: try steps away from the line and sideways along it
+            txt = f"{v:,}".replace(",", ".")
+            hw = self.font("LiberationSans-Bold.ttf", size).getlength(txt) / 2 * k
+            hh = 0.55 * size * k
+            a = math.radians(-ang)
+            u = np.array([math.cos(a), math.sin(a)])
+            vv = np.array([-u[1], u[0]])
+            gx, gy = np.meshgrid(np.linspace(-1, 1, 11), np.linspace(-1, 1, 5))
+            box = (gx.ravel()[:, None] * hw * u + gy.ravel()[:, None] * hh * vv)
+            offs = np.linspace(hh + 3 * k * self.s, hh + 60 * k * self.s, 10)
+            lats = np.linspace(-70, 70, 15) * k * self.s
+            OO, LL = np.meshgrid(offs, lats, indexing="ij")
+            cands = (np.array([ax, ay])[None, None] + OO[..., None] * n + LL[..., None] * t).reshape(-1, 2)
+            q = cands[:, None, :] + box[None]                      # (candidates, box points, 2)
+            qx = np.clip(np.round(q[..., 0]).astype(int), 0, c.shape[1] - 1)
+            qy = np.clip(np.round(q[..., 1]).astype(int), 0, c.shape[0] - 1)
+            bad = (c[qy, qx] != own).sum(1) + self._town_hits(q / k, pan)
+            costs = bad * 25 + OO.ravel() / k + np.abs(LL.ravel()) / k * 0.6
+            wts = np.exp(-(costs - costs.min()) / (20.0 * self.s))  # soft choice: no jumps between spots
+            best = (np.array(cands) * wts[:, None]).sum(0) / wts.sum()
+            fx, fy = best[0] / k + pan.fr.px0, best[1] / k
+            pts.append((hint[0] + (fx - hint[0]) * fb, hint[1] + (fy - hint[1]) * fb))
+            ang *= fb
+            dirs.append((math.cos(math.radians(2 * ang)), math.sin(math.radians(2 * ang))))
+        if not pts:
+            return np.array(hint, float), 0.0
+        p = np.mean(pts, 0)
+        c2, s2 = np.mean(dirs, 0)
+        return p, math.degrees(0.5 * math.atan2(s2, c2))
+
+    def label_pose_smooth(self, lab, day, step=2 / 24):
+        """label_pose sampled on a fixed 2-hour grid and linearly interpolated: always continuous."""
+        cache = self.__dict__.setdefault("_pose_cache", {})
+        g0 = math.floor(day / step) * step
+        out = []
+        for g in (g0, g0 + step):
+            key = (lab["seed"], round(g, 5))
+            if key not in cache:
+                if len(cache) > 400:
+                    cache.clear()
+                hx = T_interp([(d, q[0]) for d, q in lab["hint"]], g)
+                hy = T_interp([(d, q[1]) for d, q in lab["hint"]], g)
+                v = max(self.army_value(lab, day), 1)
+                cache[key] = self.label_pose(lab, g, (hx, hy), v, self.number_size(v))
+            out.append(cache[key])
+        u = (day - g0) / step
+        (p0, a0), (p1, a1) = out
+        return np.asarray(p0) * (1 - u) + np.asarray(p1) * u, a0 * (1 - u) + a1 * u
+
+    def _town_hits(self, q, pan):
+        """How many of the points q (panel-local output px) fall on a town dot or name."""
+        s = self.s
+        boxes = self.__dict__.get("_town_boxes")
+        if boxes is None:
+            f = self.font("LiberationSans-Regular.ttf", 10 * s)
+            boxes = np.array([(x - pan.fr.px0 - 4 * s, y - 4 * s, x - pan.fr.px0 + 6 * s + f.getlength(nm), y + 15 * s)
+                              for nm, x, y in self.towns])
+            self._town_boxes = boxes
+        qq = q[..., None, :]  # (..., 1, 2) against (towns, 4)
+        inside = ((qq[..., 0] >= boxes[:, 0]) & (qq[..., 0] <= boxes[:, 2]) &
+                  (qq[..., 1] >= boxes[:, 1]) & (qq[..., 1] <= boxes[:, 3]))
+        return inside.any(-1).sum(-1)
 
     def draw_labels(self, img, day):
         cands = []
@@ -427,14 +561,21 @@ class Renderer:
                 continue
             hx = T_interp([(d, q[0]) for d, q in lab["hint"]], day)
             hy = T_interp([(d, q[1]) for d, q in lab["hint"]], day)
-            cands.append((v, (hx, hy), alpha, lab["seed"]))
-        placed = []
-        for v, p, alpha, key in sorted(cands, key=lambda c: -c[0]):
-            txt = f"{v:,}".replace(",", ".")
             size = self.number_size(v)
+            if lab.get("fixed"):
+                p, ang = (hx, hy), 0.0
+            else:
+                p, ang = self.label_pose_smooth(lab, day)
+            cands.append((v, p, ang, alpha, lab["seed"], size))
+        placed = []
+        for v, p, ang, alpha, key, size in sorted(cands, key=lambda c: -c[0]):
+            txt = f"{v:,}".replace(",", ".")
             w = self.font("LiberationSans-Bold.ttf", size).getlength(txt) / 2 + 3 * self.s
             h = size * 0.6 + 2 * self.s
-            box = Polygon([(p[0] - w, p[1] - h), (p[0] + w, p[1] - h), (p[0] + w, p[1] + h), (p[0] - w, p[1] + h)])
+            a = math.radians(-ang)
+            ux, uy, vx, vy = math.cos(a), math.sin(a), -math.sin(a), math.cos(a)
+            box = Polygon([(p[0] + sx * w * ux + sy * h * vx, p[1] + sx * w * uy + sy * h * vy)
+                           for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))])
             free = not any(box.intersects(b) for b in placed)
             if free:
                 placed.append(box)
@@ -442,7 +583,7 @@ class Renderer:
             cur = min(1.0, cur + 0.15) if free else max(0.0, cur - 0.15)
             self._vis[key] = cur
             if cur > 0.01:
-                self.draw_text_shadow(img, txt, p[0], p[1], size, alpha * cur)
+                self.draw_text_shadow(img, txt, p[0], p[1], size, alpha * cur, angle=ang)
 
     def draw_markers(self, img, day, vt):
         s = self.s
