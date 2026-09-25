@@ -731,7 +731,7 @@ def split_ranges(gaps, pieces):
 
 
 def build_audio(sched, out_wav):
-    """Music: the tracks in build/real/music (in name order), starting 10 s in (after the spoken intro
+    """Music: the tracks in build/real/music (in name order), starting 10.7 s in (after the spoken intro
     of the first track), crossfaded and looped to the length of the video. Falls back to the
     procedural score when no tracks are present."""
     import glob
@@ -747,13 +747,13 @@ def build_audio(sched, out_wav):
             y = y.mean(1) if y.ndim > 1 else y
             assert fsr == sr
             if i == 0:
-                y = y[int(10.0 * sr):]
+                y = y[int(10.7 * sr):]
             parts.append(y / (np.sqrt((y ** 2).mean()) + 1e-9) * 0.16)
         xf = int(3.0 * sr)
         music = np.zeros(0, np.float32)
         k = 0
         while len(music) < n:
-            y = parts[k % len(parts)] if k < len(parts) else parts[k % len(parts)][int(10.0 * sr) * 0:]
+            y = parts[k % len(parts)]
             if len(music) == 0:
                 music = y.copy()
             else:
