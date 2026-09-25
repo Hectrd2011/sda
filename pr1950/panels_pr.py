@@ -218,8 +218,42 @@ def build(name, W, H):
             continue
         parts = list(s.parts) + [len(s.points)]
         roads += [np.asarray(s.points[parts[i]:parts[i + 1]], float) for i in range(len(parts) - 1)]
-    road_a = line_layer(roads, max(2, SS), closed=False) * land_a
-    rail_a = line_layer([np.asarray(r, float) for r in NW.RAILWAYS], max(2, SS), closed=False) * land_a
+    # Keep every route on land: densify it, then move any point that falls in the sea or right on the
+    # shoreline to the nearest point at least ~500 m inland, so routes hug the coast instead of cutting
+    # across bays (the hand-traced routes are straight between towns).
+    km_px = (fr.X1 - fr.X0) / pw * np.cos(np.radians(18.2)) / 1000.0
+    inland = ndimage.binary_erosion(land_a > 0.5, iterations=max(1, int(round(0.5 / km_px))))
+    _, (iy, ix) = ndimage.distance_transform_edt(~inland, return_indices=True)
+
+    def on_land(line):
+        a = np.asarray(line, float)
+        seg = np.sqrt(((a[1:] - a[:-1]) ** 2).sum(1))
+        n = max(2, int(seg.sum() / 0.004))
+        s = np.concatenate([[0], np.cumsum(seg)])
+        t = np.linspace(0, s[-1], n)
+        lo, la = np.interp(t, s, a[:, 0]), np.interp(t, s, a[:, 1])
+        x, y = fr.px(lo, la, local=True)
+        xi = np.clip(np.round(x).astype(int), 0, pw - 1)
+        yi = np.clip(np.round(y).astype(int), 0, ph - 1)
+        bad = ~inland[yi, xi]
+        x = np.where(bad, ix[yi, xi], x).astype(float)
+        y = np.where(bad, iy[yi, xi], y).astype(float)
+        k = np.ones(5) / 5  # smooth out the kinks left by snapping
+        if len(x) > 5:
+            x = np.concatenate([x[:2], np.convolve(x, k, "valid"), x[-2:]])
+            y = np.concatenate([y[:2], np.convolve(y, k, "valid"), y[-2:]])
+        return list(zip((x * SS).tolist(), (y * SS).tolist()))
+
+    def route_layer(lines, width):
+        im = Image.new("L", (pw * SS, ph * SS), 0)
+        d = ImageDraw.Draw(im)
+        for r in lines:
+            if len(r) > 1:
+                d.line(on_land(r), fill=255, width=width, joint="curve")
+        return np.asarray(im.resize((pw, ph), Image.BOX), np.float32) / 255.0
+
+    road_a = route_layer(roads, max(2, SS)) * land_a
+    rail_a = route_layer([np.asarray(r, float) for r in NW.RAILWAYS], max(2, SS)) * land_a
     # slope (rise over run) for movement costs
     m_per_px = (fr.X1 - fr.X0) / fr.pw * np.cos(np.radians(18.2))
     gy, gx = np.gradient(ndimage.gaussian_filter(np.maximum(elev, 0), 1.0), m_per_px)
