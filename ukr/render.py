@@ -732,40 +732,39 @@ def split_ranges(gaps, pieces):
     return out
 
 
+# music playlist: (file in build/real/music, start second) - played one after another, no crossfades
+MUSIC = [("01_behemoth.wav", 10.7),                   # GosT - Behemoth (Perturbator remix), after the spoken intro
+         ("02_katyusha.wav", 93.0),                   # Hearts of Iron IV - Katyusha (full version), from 1:33
+         ("03_sacred_war.wav", 0.0),                  # Hearts of Iron IV - Sacred War
+         ("04_well_oiled_war_machine.wav", 0.0)]      # Hearts of Iron III - Well Oiled War Machine
+
+
 def build_audio(sched, out_wav):
-    """Music: the tracks in build/real/music (in name order), starting 10.7 s in (after the spoken intro
-    of the first track), crossfaded and looped to the length of the video. Falls back to the
-    procedural score when no tracks are present."""
-    import glob
+    """Music: the MUSIC playlist back to back (looped if the video is longer), each track matched in
+    loudness. Falls back to the procedural score when the tracks are missing."""
     import wave
     import soundfile as sf
     sr = audio.SR
     n = int(sched.total * sr)
-    tracks = sorted(glob.glob(os.path.join(REAL, "music", "*.wav")))
-    if tracks:
+    tracks = [(os.path.join(REAL, "music", f), t0) for f, t0 in MUSIC]
+    if all(os.path.exists(f) for f, _ in tracks):
         parts = []
-        for i, f in enumerate(tracks):
+        for f, t0 in tracks:
             y, fsr = sf.read(f, dtype="float32")
             y = y.mean(1) if y.ndim > 1 else y
             assert fsr == sr
-            if i == 0:
-                y = y[int(10.7 * sr):]
-            parts.append(y / (np.sqrt((y ** 2).mean()) + 1e-9) * 0.16)
-        xf = int(3.0 * sr)
-        music = np.zeros(0, np.float32)
-        k = 0
+            y = y[int(t0 * sr):]
+            y = np.trim_zeros(np.where(np.abs(y) < 1e-4, 0, y), "b")   # drop trailing silence
+            sec = np.sqrt(np.add.reduceat(y ** 2, np.arange(0, len(y), sr)) / sr)
+            y = y / (np.percentile(sec, 85) + 1e-9) * 0.33            # loud parts equally loud
+            k = int(0.03 * sr)                                          # de-click the joins
+            y[:k] *= np.linspace(0, 1, k)
+            y[-k:] *= np.linspace(1, 0, k)
+            parts.append(y)
+        music = np.concatenate(parts)
         while len(music) < n:
-            y = parts[k % len(parts)]
-            if len(music) == 0:
-                music = y.copy()
-            else:
-                ramp = np.linspace(0, 1, xf, dtype=np.float32)
-                head = music[:-xf]
-                blend = music[-xf:] * (1 - ramp) + y[:xf] * ramp
-                music = np.concatenate([head, blend, y[xf:]])
-            k += 1
+            music = np.concatenate([music, *parts])
         music = music[:n]
-        music /= np.abs(music).max() + 1e-9
     else:
         music = audio.make_music(sched.total, [(0.0, "intro"), (INTRO, "tension")])
     events = [(s["t0"], np.load(s["path"])) for s in sched.speeches]
