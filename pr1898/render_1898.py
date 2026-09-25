@@ -717,8 +717,8 @@ class Renderer:
                      "Army sizes are rounded estimates; small detachments and times of day are approximate.",
                      "US-held ground spreads along the 1898 roads (hand-traced) from the towns held on each date.",
                      "Quotations are performed by an AI voice with a phonograph filter; no recordings survive.",
-                     "Music: marches by John Philip Sousa (public domain scores from the Mutopia Project),",
-                     "played by a synthesized band (GeneralUser GS soundfont). Map: Natural Earth, AWS Terrain Tiles."]
+                     "Music: La Marcha Real; Sousa, The Pride of the Wolverines (US Marine Band); Die Toten Erwachen.",
+                     "Map: Natural Earth; elevation: AWS Terrain Tiles."]
             for i, n in enumerate(notes):
                 f = mid if i == 0 else small
                 d.text(((W - d.textlength(n, font=f)) / 2, H * 0.3 + i * 30 * s), n, font=f,
@@ -813,25 +813,53 @@ def battle_sounds(sched, n):
     return audio.reverb(out, seconds=2.5, mix=0.5)
 
 
+REAL = os.path.join(BUILD, "real")
+
+
+def real_track(name):
+    import soundfile as sf
+    y, sr = sf.read(os.path.join(REAL, name + ".wav"), dtype="float32")
+    assert sr == audio.SR
+    return y if y.ndim == 1 else y.mean(1)
+
+
 def build_audio(sched, out_wav):
+    """Soundtrack from real recordings (supplied by the user), crossfaded at the story's turning points:
+    La Marcha Real under Spanish rule, the US Marine Band's "The Pride of the Wolverines" for the landing,
+    "Die Toten Erwachen" for the fighting inland, the Marcha Real again as Spain leaves, and the Marine
+    Band's finale over the handover and closing titles."""
     import wave
     sr = audio.SR
     n = int(sched.total * sr)
+    vt = lambda d: sched.vt_of(T.as_day(d))
+    t_land, t_inland, t_arm = vt("1898-07-25 06:00"), vt("1898-08-06 00:00"), vt("1898-08-13 14:00")
+    wol = real_track("wolverines")
+    fin = 32.0  # seconds of the Wolverines finale that close the video
+    plan = [  # (track, source start s, video start s, video end s)
+        ("marcha_real", 11.4, 0.0, t_land),
+        ("wolverines", 0.1, t_land, t_inland),
+        ("toten_erwachen", 0.0, t_inland, t_arm),
+        ("marcha_real", 11.4, t_arm, sched.total - fin),
+        ("wolverines", len(wol) / sr - 3.0 - fin, sched.total - fin, sched.total),
+    ]
     music = np.zeros(n, np.float32)
-    cues = [(sched.vt_of(T.as_day(d)) if T.as_day(d) > 0 else 0.0, name) for name, d in T.MUSIC]
-    cues.append((sched.total, None))
-    for (t0, name), (t1, _) in zip(cues, cues[1:]):
-        y = march_audio(name)
-        s0, s1 = int(t0 * sr), min(n, int((t1 + 3.0) * sr))
-        seg = np.resize(y, s1 - s0)  # loop a march if the section is longer than it
+    xf = 2.5
+    for i, (name, src0, t0, t1) in enumerate(plan):
+        y = real_track(name)
+        a = max(0.0, t0 - (xf if i else 0.0))
+        s0, s1 = int(a * sr), min(n, int(t1 * sr))
+        seg = y[int(src0 * sr):int(src0 * sr) + (s1 - s0)]
+        seg = np.pad(seg, (0, max(0, (s1 - s0) - len(seg))))
+        seg = seg / (np.sqrt((seg[seg != 0] ** 2).mean()) + 1e-9) * 0.16  # match loudness between recordings
         fade = np.ones(len(seg), np.float32)
-        nf = min(int(3.0 * sr), len(seg) // 3)
-        fade[:nf] = np.linspace(0, 1, nf)
-        fade[-nf:] = np.linspace(1, 0, nf)
+        nf = int(xf * sr)
+        if i:
+            fade[:nf] = np.linspace(0, 1, nf)
+        if i < len(plan) - 1:
+            fade[-nf:] = np.minimum(fade[-nf:], np.linspace(1, 0, nf))
         music[s0:s1] += seg * fade
-    music = audio.reverb(music, seconds=1.8, mix=0.2)
     music /= np.abs(music).max() + 1e-9
-    music += battle_sounds(sched, n) * 0.5
+    music += battle_sounds(sched, n) * 0.35
     events = [(s["t0"], np.load(s["path"])) for s in sched.speeches]
     pcm = audio.mix(sched.total, music, events, bell_time=None)
     with wave.open(out_wav, "wb") as w:
