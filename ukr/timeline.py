@@ -355,20 +355,18 @@ EVENTS = [
 ]
 
 # speeches: filled in with real audio files by audio.real_speeches(); the text is shown nowhere (background)
-SPEECHES = [
+SPEECHES = [   # original recordings (build/real/speeches/<file>.wav); the text is only used for the AI-voice fallback
     dict(date="2022-02-24", speaker="Vladimir Putin", role="Address announcing the invasion", voice="bm_daniel",
          text="I have made the decision to conduct a special military operation.", file="putin_2022_02_24"),
-    dict(date="2022-02-26", speaker="Volodymyr Zelenskyy", role="Video from central Kyiv", voice="bm_george",
-         text="We are all here. Our soldiers are here. The citizens are here. We are defending our independence, "
-              "our state, and it will remain so.", file="zelenskyy_2022_02_25"),
-    dict(date="2022-03-26", speaker="Joe Biden", role="Speech in Warsaw", voice="am_michael",
-         text="For God's sake, this man cannot remain in power.", file="biden_2022_03_26"),
-    dict(date="2022-09-21", speaker="Vladimir Putin", role="Partial mobilisation address", voice="bm_daniel",
-         text="I consider it necessary to support the proposal to carry out a partial mobilisation.",
-         file="putin_2022_09_21"),
+    dict(date="2022-02-25", speaker="Volodymyr Zelenskyy", role="Address to the citizens of Russia", voice="bm_george",
+         text="If they try to take away our country, our freedom, our lives, we will defend ourselves. "
+              "When you attack us, you will see our faces, not our backs.", file="zelenskyy_2022_02_24"),
     dict(date="2022-12-21", speaker="Volodymyr Zelenskyy", role="Address to the US Congress", voice="bm_george",
          text="Against all odds and doom-and-gloom scenarios, Ukraine didn't fall. Ukraine is alive and kicking.",
          file="zelenskyy_2022_12_21"),
+    dict(date="2023-02-21", speaker="Joe Biden", role="Speech in Warsaw", voice="am_michael",
+         text="One year ago, the world was bracing for the fall of Kyiv. Kyiv stands strong. Kyiv stands proud. "
+              "It stands tall. And most important, it stands free.", file="biden_2023_02_21"),
 ]
 
 TOTALS = [

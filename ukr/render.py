@@ -676,7 +676,9 @@ def load_schedule():
             y, sr = sf.read(wav, dtype="float32")
             y = y.mean(1) if y.ndim > 1 else y
             assert sr == audio.SR
-            y = y / (np.abs(y).max() + 1e-9) * 0.9
+            # match loudness rather than peaks, so the speeches sit above the (loud, compressed) music
+            act = y[np.abs(y) > 0.02 * np.abs(y).max()]
+            y = np.tanh(y / (np.sqrt((act ** 2).mean()) + 1e-9) * 0.2 * 1.3) / 1.3
             path = os.path.join(BUILD, "speech", s["file"] + "_real.npy")
             np.save(path, y)
             meta[s["date"]] = dict(meta.get(s["date"], {}), duration=len(y) / sr, path=path)

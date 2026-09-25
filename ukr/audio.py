@@ -256,9 +256,9 @@ def mix(total_seconds, music, speech_events, bell_time=None):
         e = min(n, s0 + len(y))
         voice[s0:e] += y[:e - s0]
         a, b = max(0, s0 - int(0.6 * SR)), min(n, e + int(0.8 * SR))
-        duck[a:b] = 0.28
+        duck[a:b] = 0.22
     duck = signal.sosfiltfilt(signal.butter(1, 1.5, fs=SR, output="sos"), duck).astype(np.float32)
-    out = mus * 0.42 * duck + voice * 0.95
+    out = mus * 0.42 * duck + voice * 1.5
     if bell_time is not None:
         b = bells()
         s0 = int(bell_time * SR)
