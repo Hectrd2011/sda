@@ -209,6 +209,21 @@ def build(name, W, H):
             if len(r) > 1:
                 rivers.append(r)
     river_a = line_layer(rivers, max(1, SS // 2), closed=False) * land_a
+    # 1950 roads (hand-traced main roads plus Natural Earth highways) and the railway
+    import network_pr as NW
+    roads = [np.asarray(r, float) for r in NW.ROADS]
+    for s in shapefile.Reader(os.path.join(DL, "ne_10m_roads", "ne_10m_roads.shp")).shapes():
+        b = s.bbox
+        if b[2] < bb[0] or b[0] > bb[2] or b[3] < bb[1] or b[1] > bb[3]:
+            continue
+        parts = list(s.parts) + [len(s.points)]
+        roads += [np.asarray(s.points[parts[i]:parts[i + 1]], float) for i in range(len(parts) - 1)]
+    road_a = line_layer(roads, max(2, SS), closed=False) * land_a
+    rail_a = line_layer([np.asarray(r, float) for r in NW.RAILWAYS], max(2, SS), closed=False) * land_a
+    # slope (rise over run) for movement costs
+    m_per_px = (fr.X1 - fr.X0) / fr.pw * np.cos(np.radians(18.2))
+    gy, gx = np.gradient(ndimage.gaussian_filter(np.maximum(elev, 0), 1.0), m_per_px)
+    slope = np.hypot(gx, gy)
     base = base * (1 - 0.6 * river_a[..., None]) + np.array([150, 170, 190], np.float32) / 255 * 0.6 * river_a[..., None]
     base = base * (1 - 0.55 * coast_a[..., None]) + np.array([120, 130, 140], np.float32) / 255 * 0.55 * coast_a[..., None]
 
@@ -221,7 +236,8 @@ def build(name, W, H):
                           np.float32) / 255.0 * land_a * (1 - coast_a)
 
     res = dict(base=base.astype(np.float32), ids=ids.astype(np.uint8), land=land_a.astype(np.float32),
-               border=border_a.astype(np.float32))
+               border=border_a.astype(np.float32), road=road_a.astype(np.float32),
+               rail=rail_a.astype(np.float32), slope=slope.astype(np.float32))
     np.savez_compressed(out, **res)
     return res
 

@@ -120,14 +120,22 @@ class Panel:
         self.fr = PN.PanelFrame(name, W, H)
         b = PN.build(name, W, H)
         self.base, self.ids, self.land, self.border = b["base"], b["ids"], b["land"], b["border"]
+        self.road, self.rail, self.slope = b["road"], b["rail"], b["slope"]
+        fr = self.fr
+        self.px_km = (fr.X1 - fr.X0) / fr.pw * math.cos(math.radians(18.2)) / 1000.0
+        self._reach = {}
         self.key_of = {v: k for k, v in PN.KEY_ID.items()}
         self._victim = {}
         self._mask = {}
         self._mask_bytes = 0
         self.zones = []
         for z in T.ZONES:
-            z = dict(dict(panel=name, kind="ellipse", occ="NAT", victims=["PRI"]), **z)
+            z = dict(dict(panel=name, kind="reach", occ="NAT", victims=["PRI"]), **z)
             zz = dict(z, a=T.as_day(z["start"]), b=T.as_day(z["end"]))
+            if zz["kind"] == "reach":
+                zz["kf"] = [(T.as_day(d), np.array(e, float)) for d, *e in z["keys"]]
+                self.zones.append(zz)
+                continue
             if z.get("kind", "ellipse") == "poly":
                 zz["kf"] = [(T.as_day(d), self.P(resample_ring(r))) for d, r in z["keys"]]
             else:
@@ -186,9 +194,65 @@ class Panel:
         t = np.linspace(0, 2 * np.pi, 64, endpoint=False)
         return self.P(np.stack([cx + rx * np.cos(t), cy + ry * np.sin(t)], 1))
 
+    # -- areas that spread along roads and valleys ------------------------------------------------
+    def reach_maps(self, z):
+        """Travel-cost distance (km of easy going) from each keyframe centre, in a window around the zone.
+        Roads are fast, open country slower, steep slopes slowest, the sea impassable."""
+        key = z["name"]
+        if key in self._reach:
+            return self._reach[key]
+        from skimage.graph import MCP_Geometric
+        pts = [self.P([(e[0], e[1])])[0] for _, e in z["kf"]]
+        rmax = max(e[2] for _, e in z["kf"]) * 111.0 * 2.2 / self.px_km  # generous window in px
+        xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+        x0, x1 = max(0, int(min(xs) - rmax)), min(self.fr.pw, int(max(xs) + rmax) + 1)
+        y0, y1 = max(0, int(min(ys) - rmax)), min(self.fr.ph, int(max(ys) + rmax) + 1)
+        sl = (slice(y0, y1), slice(x0, x1))
+        cost = 1.0 + 7.0 * np.minimum(self.slope[sl], 1.0)
+        cost = np.where(self.road[sl] > 0.25, np.minimum(cost, 0.45), cost)
+        cost = np.where(self.land[sl] > 0.5, cost, 1e6)
+        maps = []
+        for p in pts:
+            mcp = MCP_Geometric(cost)
+            c = (min(max(int(p[1]) - y0, 0), y1 - y0 - 1), min(max(int(p[0]) - x0, 0), x1 - x0 - 1))
+            d, _ = mcp.find_costs([c])
+            maps.append((d * self.px_km).astype(np.float32))
+        self._reach[key] = ((x0, y0, x1, y1), maps)
+        return self._reach[key]
+
+    def reach_mask(self, z, day):
+        (x0, y0, x1, y1), maps = self.reach_maps(z)
+        kf = z["kf"]
+        if day <= kf[0][0]:
+            i, u = 0, 0.0
+        elif day >= kf[-1][0]:
+            i, u = len(kf) - 1, 0.0
+        else:
+            i = max(j for j in range(len(kf)) if kf[j][0] <= day)
+            u = smooth((day - kf[i][0]) / max(kf[i + 1][0] - kf[i][0], 1e-9)) if i + 1 < len(kf) else 0.0
+        e0 = kf[i][1]
+        e1 = kf[min(i + 1, len(kf) - 1)][1]
+        R = (e0[2] + (e1[2] - e0[2]) * u) * 111.0 * 0.6
+        if R < 1e-3:
+            return None
+        D = maps[i] if u == 0 else maps[i] * (1 - u) + maps[min(i + 1, len(kf) - 1)] * u
+        soft = 1.2 * self.px_km
+        m = np.clip((R - D) / soft + 0.5, 0, 1).astype(np.float32)
+        return m, (x0, y0, x1, y1)
+
     def zones_at(self, day):
         for z in self.zones:
             if not (z["a"] <= day < z["b"]):
+                continue
+            if z["kind"] == "reach":
+                got = self.reach_mask(z, day)
+                if got is None:
+                    continue
+                m, bb = got
+                vm, _ = self.victim_mask(z["victims"])
+                m = m * vm[bb[1]:bb[3], bb[0]:bb[2]]
+                if m.max() > 0.01:
+                    yield m, z["occ"], bb
                 continue
             shape = self.zone_shape(z, day)
             if shape is None:
@@ -258,6 +322,10 @@ class Panel:
         if lt is not None:  # freshly taken ground: a light band just behind the moving front
             k = (0.7 * lt)[..., None]
             out = out * (1 - k) + np.float32(0.97) * k
+        kr = (self.road * 0.28)[..., None]  # roads: thin warm grey
+        out = out * (1 - kr) + np.array([0.35, 0.3, 0.26], np.float32) * kr
+        kl = (self.rail * 0.7)[..., None]   # railway: dark line, like the WW1 maps
+        out = out * (1 - kl) + np.float32(0.1) * kl
         b = self.border[..., None] * np.float32(0.5)
         out = out * (1 - b) + np.array([0.86, 0.45, 0.5], np.float32) * b
         fac = code[idx]
