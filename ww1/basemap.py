@@ -325,7 +325,7 @@ def build(W=1280, H=720, view="europe"):
     grain = ndimage.gaussian_filter(rng.normal(0, 1, (H, W)).astype(np.float32), 1.2) * 0.02
     landc = land_rgb[None, None, :] * (rel[..., None] + grain[..., None])
 
-    water_rgb = np.array([203, 218, 232], np.float32) / 255.0
+    water_rgb = np.array([219, 230, 242], np.float32) / 255.0  # as in the reference
     yy, xx = np.mgrid[0:H, 0:W]
     hatch = ((xx + yy) % 6 < 1).astype(np.float32) * 0.025
     waterc = water_rgb[None, None, :] - hatch[..., None]

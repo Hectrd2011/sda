@@ -22,9 +22,9 @@ END = D("1918-11-11")
 # faction -> RGB, overlay alpha
 FACTIONS = {
     "CP": ((72, 78, 56), 0.72),      # Central Powers
-    "ENT": ((70, 108, 180), 0.66),   # Entente / Allies (steel blue)
+    "ENT": ((41, 109, 187), 0.66),   # Entente / Allies (blends to the reference's Allied blue 111,155,204)
     "CPC": ((150, 158, 118), 0.62),  # Central Powers client states (lighter tint, like Italian Mapper)
-    "SOV": ((204, 88, 56), 0.66),    # Soviet Russia (from the October Revolution)
+    "SOV": ((150, 70, 34), 0.66),    # Soviet Russia (blends to the reference's Soviet 183,130,103)
     "OUT": ((150, 150, 140), 0.18),  # signed armistice
 }
 LEGEND = [("CP", "Central Powers", None), ("CPC", "Central Powers client states", "1916-11-05"),

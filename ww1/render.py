@@ -34,6 +34,7 @@ MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", 
 END_DAY = T.day_index(T.END) + 11 / 24  # 11:00 on 11 November 1918
 
 
+HALO_FACTIONS = ("ENT", "SOV")  # the front glow sits on these blocs' side
 LABEL_SETBACK = 58.0  # px at 1280 wide (about 4.5% of the screen width, like the reference)
 NUM_FONT = "OpenSans-Bold.ttf"  # the numbers' typeface in the reference videos
 
@@ -48,7 +49,9 @@ def ffmpeg_exe():
 
 # ----------------------------------------------------------------------------- pacing
 def pace_multiplier(day):
-    """Relative speed of the calendar (1 = normal). Lower = slower."""
+    """Relative speed of the calendar (1 = normal). The reference runs at one steady pace
+    (~2.76 days/s) with no slow-downs, so this is now always 1."""
+    return 1.0
     d = T.START + timedelta(days=int(day))
     y, m, dd = d.year, d.month, d.day
     if (y, m) == (1914, 7) or ((y, m) == (1914, 8) and dd <= 6):
@@ -240,12 +243,62 @@ class Renderer:
         if day >= keys[-1][0]:
             return keys[-1][1], True
         line = fr["interp"](day)
-        return line + self.spearheads(fr, day), True
+        return line + self.spearheads(fr, day) + self.teeth(fr, day, line), True
 
-    SPEAR_FINGERS = (3, 6)   # thrusts per advancing stretch between two keyframes
-    SPEAR_WIDTH = 7.0        # finger half-width, in line points (of 500)
+    TEETH_MAX = 90.0      # px at 1280 wide: deepest finger on a fast-moving front
+    TEETH_SPACING = 30.0  # px at 1280 wide between fingers
+    TEETH_WIDTH = (5.0, 11.0)  # px at 1280 wide: finger half-width range
+    TEETH_ASPECT = 7.0    # long thin fingers, like the reference
+    TEETH_WINDOW = 10.0   # days of movement that build up the lobes
+
+    def teeth(self, fr, day, line):
+        """Irregular lobes (thrusts and pockets) on fronts that are moving, like the reference's jagged
+        advancing fronts. Lobes are laid out in pixels along the front's first keyframe and ride along
+        it by arc-length fraction; their depth follows how far each stretch moved in the last
+        TEETH_WINDOW days, so static fronts stay smooth."""
+        s = self.s
+        if "_teeth" not in fr:
+            k0 = fr["keys"][0][1]
+            L0 = float(np.linalg.norm(np.diff(k0, axis=0), axis=1).sum()) + 1e-6
+            rng = np.random.default_rng(zlib.crc32(("teeth:" + fr["name"]).encode()))
+            lobes = []
+            pos = rng.uniform(0, self.TEETH_SPACING * s)
+            while pos < L0:
+                # irregular like hand-drawn fronts: a few long thrusts, many short ones, some pockets
+                w = rng.uniform(*self.TEETH_WIDTH) * s * (1.6 if rng.random() < 0.25 else 1.0)
+                amp = rng.uniform(0.35, 1.0) if rng.random() < 0.72 else -rng.uniform(0.3, 0.8)
+                lobes.append((pos / L0, w, amp))
+                pos += rng.uniform(0.45, 1.8) * self.TEETH_SPACING * s
+            fr["_teeth"] = lobes
+        seg = np.linalg.norm(np.diff(line, axis=0), axis=1)
+        arc = np.concatenate([[0.0], np.cumsum(seg)])
+        L = arc[-1] + 1e-6
+        t0 = max(fr["keys"][0][0], day - self.TEETH_WINDOW)
+        mv = line - fr["interp"](t0)                      # where each stretch has been heading
+        moved = np.linalg.norm(mv, axis=1)
+        if moved.max() < 8.0 * s:
+            return 0.0
+        mdir = ndimage.gaussian_filter1d(mv, 8.0, axis=0)
+        mdir /= np.linalg.norm(mdir, axis=1, keepdims=True) + 1e-9
+        move = ndimage.gaussian_filter1d(np.clip((moved - 8.0 * s) / (14.0 * s), 0.0, 1.0), 6.0)
+        edge = np.clip(np.minimum(arc, L - arc) / (0.08 * L), 0.0, 1.0)
+        env = move * edge * edge * (3 - 2 * edge)
+        off = np.zeros(len(line))
+        for u, w, amp in fr["_teeth"]:
+            c = u * L
+            j = int(min(len(line) - 1, np.searchsorted(arc, c)))
+            if amp > 0:   # a thrust: runs ahead in the direction of the advance
+                d = min(self.TEETH_MAX * s, self.TEETH_ASPECT * w, 1.6 * moved[j])
+            else:         # a pocket left behind, never further back than where the front was
+                d = min(self.TEETH_MAX * s, self.TEETH_ASPECT * w, 0.8 * moved[j])
+            off += amp * d * env[j] * np.exp(-0.5 * ((arc - c) / w) ** 2)
+        return mdir * off[:, None]
+
+    # Broad thrusts between two keyframes, with the gaps between them lagging (fitted to the reference).
+    SPEAR_FINGERS = (4, 7)   # thrusts per advancing stretch between two keyframes
+    SPEAR_WIDTH = 16.0       # thrust half-width, in line points (of 500)
     SPEAR_LEAD = 0.9         # how far ahead a thrust runs (fraction of the move, before the sin easing)
-    SPEAR_LAG = 0.35         # how far the rest of the front lags behind
+    SPEAR_LAG = 0.6          # how far the gaps between thrusts lag behind
 
     def spearheads(self, fr, day):
         """Offsets that turn an advance between two keyframes into rounded thrusts, like the reference:
@@ -373,31 +426,88 @@ class Renderer:
             fac[sl] = np.where(m > 0.5, self.fac_code[occ], fac[sl])
         return fac
 
-    # Newly taken ground flashes a see-through warm cream and fades into its new colour over ~1.2 days,
-    # like the reference (measured there: a pale peak at capture, fully recoloured about 1 day later).
-    # Computed at full resolution so the fresh patch has the same crisp edges as the territory.
-    CAPTURE_FADE = 1.2  # days
-    CAPTURE_STEPS = (0.08, 0.3, 0.55, 0.85, 1.2)
-    CREAM = (0.94, 0.89, 0.82)
+    # Captured land, fitted to the reference (Christopher's WW2, 4K, Barbarossa; model error < 1 level):
+    # a see-through warm cream patch for about a day, then a cross-fade from the old owner's colour to
+    # the new one over the next ~3 days. tau = days since the pixel changed hands.
+    CREAM = (251 / 255, 230 / 255, 218 / 255)
+    CREAM_CURVE = ((0.0, 0.95), (0.5, 0.98), (0.6, 0.45), (0.7, 0.05), (0.8, 0.0))
+    NEW_SHARE = ((0.0, 0.0), (0.8, 0.3), (1.1, 0.45), (1.35, 0.72), (1.6, 0.85), (2.5, 0.9), (3.8, 0.95), (5.2, 1.0))
+    HI_STEPS = (0.1, 0.25, 0.4, 0.52, 0.62, 0.72, 0.9, 1.1)  # full resolution: the crisp cream patch
+    LO_STEPS = (0.5, 1.0, 1.35, 1.6, 2.0, 2.5, 3.2, 4.2, 5.2)  # half resolution: colour cross-fade
 
-    def capture_light(self, day, lut_f):
-        base = lut_f[self.ids]
-        now = self.zone_codes(day, base)
-        light = np.zeros(now.shape, np.float32)
-        # newest window last, so each pixel keeps the weight of the most recent change it saw
-        for d in sorted(self.CAPTURE_STEPS, reverse=True):
-            past = self.zone_codes(day - d, base)
-            changed = (past != now) & (now > 0)
-            w = np.float32(max(0.0, 1.0 - (d - self.CAPTURE_STEPS[0]) / self.CAPTURE_FADE))
-            light[changed] = w
-        if not light.any():
-            return None
-        ys, xs = np.nonzero(light > 0.01)
-        x0, y0, x1, y1 = xs.min(), ys.min(), xs.max() + 1, ys.max() + 1
-        lt = light[y0:y1, x0:x1]
-        # soften only the very edge (anti-aliasing), keep the patch crisp
-        lt = ndimage.gaussian_filter(lt, 0.6 * self.s).astype(np.float32)
-        return lt * self.land[y0:y1, x0:x1], (x0, y0, x1, y1)
+    def _history(self, r, day, lut_f, steps, prev=0.0):
+        """(tau, old code) per pixel of renderer r: time bin since the pixel last changed hands.
+        prev: where the first bin starts (the half-resolution tail continues after the full-res bins)."""
+        base = lut_f[r.ids]
+        now = r.zone_codes(day, base)
+        tau = np.full(now.shape, np.inf, np.float32)
+        old = np.zeros(now.shape, np.int16)
+        for d in steps:
+            past = r.zone_codes(day - d, base)
+            new = (past != now) & (now > 0) & np.isinf(tau)
+            tau[new] = 0.5 * (prev + d)
+            old[new] = past[new]
+            prev = d
+        return tau, old
+
+    # The reference shows the ground about to be taken, not the ground just taken: the land that
+    # changes hands before the next step (about every 1.6 days) is a crisp see-through pale patch on
+    # the defender's colour, fading in at the start of the step; the front then sweeps through it.
+    PREVIEW_STEP = 1.6      # days between preview steps (the reference's keyframe rhythm)
+    PREVIEW_FADE_IN = 0.5   # days
+    PREVIEW_ALPHA = 0.55
+    SETTLE = 0.5            # days: captured land blends from the old colour into the new one
+
+    def _codes_at(self, day, lut_f):
+        """Territory codes at a day (cached: consecutive frames revisit the same step boundaries)."""
+        cache = self.__dict__.setdefault("_code_cache", {})
+        key = round(day, 4)
+        if key not in cache:
+            if len(cache) > 6:
+                cache.clear()
+            cache[key] = self.zone_codes(day, lut_f[self.ids])
+        return cache[key]
+
+    def capture_layer(self, day, lut_f, out):
+        now = self.zone_codes(day, lut_f[self.ids])
+        st = self.PREVIEW_STEP
+        k0 = math.floor(day / st) * st
+        target = self._codes_at(k0 + st, lut_f)
+        f = (day - k0) / self.PREVIEW_FADE_IN
+        preview = ((target != now) & (now > 0)).astype(np.float32) * np.float32(self.PREVIEW_ALPHA * min(1.0, f))
+        settle = self.zone_codes(day - self.SETTLE, lut_f[self.ids])
+        fresh = (settle != now) & (now > 0) & (settle > 0)
+        self._motion = None
+        if not preview.any() and not fresh.any():
+            return out
+        m = (preview > 0) | fresh
+        self._motion = ndimage.binary_dilation(m, iterations=int(4 * self.s)) if m.any() else None
+        ys, xs = np.nonzero(m)
+        y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+        seg = out[y0:y1, x0:x1]
+        land = self.land[y0:y1, x0:x1]
+        # just-captured land: a short blend from the old owner's colour (half of it at the moment of capture)
+        fr = fresh[y0:y1, x0:x1]
+        if fr.any():
+            oc = settle[y0:y1, x0:x1]
+            col = np.zeros(oc.shape + (3,), np.float32)
+            alp = np.zeros(oc.shape, np.float32)
+            for fac, code in self.fac_code.items():
+                if fac is None or fac not in T.FACTIONS or fac == "CPC":
+                    continue
+                sel = (oc == code) & fr
+                if sel.any():
+                    col[sel] = np.array(T.FACTIONS[fac][0], np.float32) / 255
+                    alp[sel] = T.FACTIONS[fac][1]
+            base = self.base[y0:y1, x0:x1]
+            old_rgb = base + (col - base) * alp[..., None]
+            k_old = (ndimage.gaussian_filter(fr.astype(np.float32), 1.0 * self.s) * 0.35 * land)[..., None]
+            seg = seg * (1 - k_old) + old_rgb * k_old
+        pv = ndimage.gaussian_filter(preview[y0:y1, x0:x1], 0.5 * self.s)
+        k_c = (pv * land)[..., None]
+        seg = seg * (1 - k_c) + np.array(self.CREAM, np.float32) * k_c
+        out[y0:y1, x0:x1] = seg
+        return out
 
     def _static_overlay(self):
         """Railways then pink borders, folded into one multiply/add pair (computed once)."""
@@ -424,12 +534,7 @@ class Renderer:
         a = pal_a[idx][..., None]
         out = self.base + (pal_c[idx] - self.base) * a
         if self.lo is not None:
-            got = self.capture_light(day, lut_f)
-            if got is not None:  # freshly captured land: whitish, fading into the occupier's colour
-                lt, (x0, y0, x1, y1) = got
-                k = (0.62 * lt)[..., None]  # see-through: the new owner's colour shows under the cream
-                sl = (slice(y0, y1), slice(x0, x1))
-                out[sl] = out[sl] * (1 - k) + np.array(self.CREAM, np.float32) * k
+            out = self.capture_layer(day, lut_f, out)
         mul, add = self._static_overlay()
         out *= mul
         out += add
@@ -443,11 +548,23 @@ class Renderer:
         e[:, :-1] |= dx
         e[1:, :] |= dy
         e[:-1, :] |= dy
-        if self.s > 2:  # same visual thickness at 4K
-            e = ndimage.binary_dilation(e)
-        ys, xs = np.nonzero(e)
-        k = np.float32(0.85) * self.land[ys, xs][:, None]
-        out[ys, xs] = out[ys, xs] * (1 - k) + np.array((0.96, 0.93, 0.87), np.float32) * k  # cream front line
+        # Front line as in the reference: no hard stroke, just a thin soft light line on the lighter
+        # bloc's side (Allies, Soviets), about 2 px at 1080p.
+        halo_side = np.isin(fac, [self.fac_code[f] for f in HALO_FACTIONS if f in self.fac_code])
+        ef = e.astype(np.float32)
+        px = self.s / 1.5  # 1080p pixels
+        thin = ndimage.gaussian_filter(ef, 2.2 * px)
+        thin /= max(thin.max(), 1e-6)
+        soft = ndimage.gaussian_filter(ef, 6.0 * px)
+        soft /= max(soft.max(), 1e-6)
+        k = (0.16 * np.minimum(1.0, 1.8 * thin) + 0.1 * np.minimum(1.0, 2.0 * soft)) * halo_side * self.land
+        # moving stretches get the reference's crisp bright outline (both sides of the border, ~2 px)
+        mot = getattr(self, "_motion", None)
+        if mot is not None:
+            crisp = np.minimum(1.0, ndimage.gaussian_filter(ef, 0.7 * px) * 2.2)
+            k = np.maximum(k, 0.8 * crisp * mot * self.land)
+        glow = np.array((250 / 255, 238 / 255, 228 / 255), np.float32)
+        out += (glow - out) * k[..., None]
         np.clip(out, 0, 1, out=out)
         return (out * 255).astype(np.uint8)
 
