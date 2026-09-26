@@ -39,11 +39,21 @@ def _world_view():
                 label_scale=0.55)
 
 
+def _im_view():
+    """Italian Mapper's WW1 framing, measured from his video: Miller cylindrical, 20.55W..55.94E, top at 63.16N."""
+    proj = "+proj=mill +lon_0=0 +ellps=WGS84"
+    p = pyproj.Proj(proj)
+    x0, _ = p(-20.55, 0)
+    x1, _ = p(55.94, 0)
+    _, y1 = p(0, 63.16)
+    return View("europe", proj, x0, x1, y1, bbox=(-40, 15, 80, 80))
+
+
 VIEWS = {
-    # Lambert conformal conic centred on Europe; extent chosen so the Western
-    # Front, Petrograd and Baghdad/Basra all fit in a 16:9 frame.
-    "europe": View("europe", "+proj=lcc +lat_1=35 +lat_2=60 +lat_0=47 +lon_0=17 +ellps=WGS84",
-                   -2400e3, 3550e3, 1480e3, bbox=(-30, 15, 75, 90)),
+    "europe": _im_view(),
+    # the earlier Lambert conformal conic view (Western Front, Petrograd and Basra in one 16:9 frame)
+    "europe_lcc": View("europe_lcc", "+proj=lcc +lat_1=35 +lat_2=60 +lat_0=47 +lon_0=17 +ellps=WGS84",
+                       -2400e3, 3550e3, 1480e3, bbox=(-30, 15, 75, 90)),
     # Miller cylindrical world map from Alaska (left) to Chukotka (right).
     "world": _world_view(),
 }
@@ -65,9 +75,10 @@ BLUE_MARBLE = ("bm_200407.jpg",
 TEX_P = (24.0, 40.0, 79.0)
 TEX_Q = 2.27
 NEUTRAL = ((246, 241, 230), 0.77)
-SEA_MEAN = (217, 226, 238)
+SEA_MEAN = (208, 221, 236)   # Italian Mapper's WW1 sea (Christopher: 217,226,238)
 SHADE_K = 0.45   # strength of the terrain shading over the colours
-RAIL_CATEGORIES = (1, 2)   # main and secondary lines (Italian Mapper shows a dense network)
+RAIL_CATEGORIES = (1, 2)
+RAIL_MAX_SCALERANK = 7     # the more important lines only: Italian Mapper's network is moderate
 
 # 1914 polity name -> country key used by the timeline.
 NAME_KEYS = {
@@ -352,6 +363,19 @@ def build(W=1280, H=720, view="europe"):
         land_a = np.minimum(land_a, ndimage.gaussian_filter(land_a, 0.5))
         ids[wet] = 0
     tex = np.clip(np.array(TEX_P, np.float32) + TEX_Q * sat, 0, 255)
+    # Italian Mapper's own map template (white land + satellite layer at 45/255), when it is present
+    tpath = os.path.join(DL, "im_template_europe.npz")
+    use_template = os.path.exists(tpath)
+    if use_template:
+        Tm = np.load(tpath)
+        x0c, kxt, yeqt, kyt = Tm["proj"]
+        bx0, by0 = Tm["box"][:2]
+        txp = x0c + kxt * lon - bx0
+        typ = yeqt - kyt * np.log(np.tan(np.pi / 4 + np.radians(np.clip(lat, -85, 85)) / 2)) - by0
+        trgb = np.stack([ndimage.map_coordinates(Tm["rgb"][..., c].astype(np.float32), [typ, txp], order=1, mode="nearest")
+                         for c in range(3)], -1)
+        tland = ndimage.map_coordinates(Tm["land"].astype(np.float32), [typ, txp], order=1, mode="constant") > 0.5
+        tex = np.where(tland[..., None], trgb, np.array([255, 252, 249], np.float32))
     # cities: dark blots, like the reference
     urban = Image.new("L", (W * SS, H * SS), 0)
     ud = ImageDraw.Draw(urban)
@@ -360,7 +384,8 @@ def build(W=1280, H=720, view="europe"):
             ud.polygon(fr.pts(p.exterior.coords, SS), fill=255)
     urban_a = np.asarray(urban.resize((W, H), Image.BOX), np.float32) / 255.0
     urban_a = ndimage.gaussian_filter(urban_a, 0.6 * W / 1920) * land_a
-    tex = tex * (1 - 0.55 * urban_a[..., None]) + np.array([70, 62, 55], np.float32) * 0.55 * urban_a[..., None]
+    if not use_template:   # Christopher's satellite style shows cities as dark blots; Italian Mapper's does not
+        tex = tex * (1 - 0.55 * urban_a[..., None]) + np.array([70, 62, 55], np.float32) * 0.55 * urban_a[..., None]
     landc = tex / 255.0
     # terrain shading applied over the (near-solid) colours, as in Italian Mapper's WW1
     sr = np.asarray(Image.open(os.path.join(DL, "SR_50M", "SR_50M.tif")), np.float32)
@@ -368,14 +393,14 @@ def build(W=1280, H=720, view="europe"):
     row = (89.98333 - lat) / 0.0333333
     relief = ndimage.map_coordinates(sr, [row, col], order=1) / 255.0
     del sr
-    shade = np.clip(1.0 + SHADE_K * (relief - np.median(relief[land_a > 0.5])), 0.8, 1.06)
+    shade = np.clip(1.0 + (0.0 if use_template else SHADE_K) * (relief - np.median(relief[land_a > 0.5])), 0.8, 1.06)
     shade = (shade * land_a + (1 - land_a)).astype(np.float32)
 
     # sea as in the reference: pale blue with fine diagonal hatching running top-left to bottom-right
     # (measured on the 4K reference: 6.5 px spacing at 4K, lines at ~39 deg, 1080p mean (217,226,238), L std ~9.6)
-    sp = 6.5 * W / 3840.0
+    sp = 5.7 * W / 3840.0         # Italian Mapper: 2.85 px apart at 1080p, lines at 45 deg
     ss = 2 if W < 3000 else 1
-    ang = np.radians(39.0)
+    ang = np.radians(45.0)
     g = np.zeros((H, W), np.float32)
     for y0 in range(0, H, 256):           # in strips, to keep memory low at 4K
         y1 = min(H, y0 + 256)
@@ -384,7 +409,7 @@ def build(W=1280, H=720, view="europe"):
         gg = ((1 + np.cos(2 * np.pi * u / sp)) / 2) ** 3
         g[y0:y1] = gg.reshape(y1 - y0, ss, W, ss).mean((1, 3))
     g = (g - g.mean()) / (g.std() + 1e-6)
-    waterc = (np.array(SEA_MEAN, np.float32)[None, None, :] - 9.6 * g[..., None]) / 255.0
+    waterc = (np.array(SEA_MEAN, np.float32)[None, None, :] - 9.5 * g[..., None]) / 255.0
 
     base = waterc * (1 - land_a[..., None]) + landc * land_a[..., None]
 
@@ -422,7 +447,7 @@ def build(W=1280, H=720, view="europe"):
     rails = []
     sf = shapefile.Reader(os.path.join(DL, "ne_10m_railroads", "ne_10m_railroads.shp"))
     for sr in sf.iterShapeRecords():
-        if sr.record["category"] not in RAIL_CATEGORIES:
+        if sr.record["category"] not in RAIL_CATEGORIES or sr.record["scalerank"] > RAIL_MAX_SCALERANK:
             continue
         s = sr.shape
         parts = list(s.parts) + [len(s.points)]

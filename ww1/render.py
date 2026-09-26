@@ -503,7 +503,7 @@ class Renderer:
                     col[sel] = np.array(T.FACTIONS[fac][0], np.float32) / 255
                     alp[sel] = T.FACTIONS[fac][1]
             base = self.base[y0:y1, x0:x1]
-            old_rgb = base + (col - base) * alp[..., None]
+            old_rgb = self.blend(base, col, alp)
             k_old = (ndimage.gaussian_filter(fr.astype(np.float32), 1.0 * self.s) * 0.35 * land)[..., None]
             seg = seg * (1 - k_old) + old_rgb * k_old
         pv = ndimage.gaussian_filter(preview[y0:y1, x0:x1], 0.5 * self.s)
@@ -515,12 +515,20 @@ class Renderer:
     def _static_overlay(self):
         """Railways then pink borders, folded into one multiply/add pair (computed once)."""
         if not hasattr(self, "_ov_mul"):
-            kr = self.rail[..., None] * np.float32(0.38)
+            kr = self.rail[..., None] * np.float32(getattr(T, "RAIL_STRENGTH", 0.38))
             kb = self.border[..., None] * np.float32(0.55)
             self._ov_mul = ((1 - kr) * (1 - kb)).astype(np.float32)
-            self._ov_add = (np.float32(0.12) * kr * (1 - kb)
+            self._ov_add = (np.float32(getattr(T, "RAIL_LEVEL", 0.12)) * kr * (1 - kb)
                             + np.array([0.86, 0.45, 0.5], np.float32) * kb).astype(np.float32)
         return self._ov_mul, self._ov_add
+
+    def blend(self, base, col, alpha):
+        """Faction colour over the base map: multiplied onto it (Italian Mapper's WW1, which keeps the
+        terrain texture everywhere) or laid over it with an opacity (Christopher's WW2)."""
+        a = np.asarray(alpha, np.float32)[..., None]
+        if getattr(T, "BLEND", "over") == "multiply":
+            return base * (1 - a + a * col)
+        return base + (col - base) * a
 
     def map_layer(self, day):
         W, H = self.W, self.H
@@ -534,8 +542,7 @@ class Renderer:
         for m, occ, (x0, y0, x1, y1) in self.zones(day, set_line=True):
             sub = idx[y0:y1, x0:x1]
             sub[m > 0.5] = self.pal_slot[occ]
-        a = pal_a[idx][..., None]
-        out = self.base + (pal_c[idx] - self.base) * a
+        out = self.blend(self.base, pal_c[idx], pal_a[idx])
         if self.lo is not None:
             out = self.capture_layer(day, lut_f, out)
         if self.shade is not None:
@@ -654,6 +661,9 @@ class Renderer:
 
     def number_size(self, v):
         # one size for every army, like Italian Mapper's videos
+        if isinstance(NUM_SIZE, tuple):   # (base, k, ref): size grows with the army, as in Italian Mapper's WW1
+            base, k, ref = NUM_SIZE
+            return (base + k * math.sqrt(max(v, 0) / ref)) * self.ls * self.s
         return NUM_SIZE * self.ls * self.s
 
     def number_box(self, v, p, ang):
@@ -847,6 +857,8 @@ class Renderer:
             d.text((14 * s, H - 36 * s), cap, font=f, fill=(15, 15, 15))
         # legend
         f = self.font("LiberationSans-Bold.ttf", 11 * s)
+        if not getattr(T, "SHOW_LEGEND", True):
+            return
         items = [(fac, name) for fac, name, since in T.LEGEND if since is None or day >= T.as_day(since)]
         lx, ly = W - 205 * s, H - 16 * s - 18 * s * len(items)
         for i, (fac, name) in enumerate(items):
@@ -855,7 +867,10 @@ class Renderer:
             if tex is None:
                 m = self.land > 0.9
                 tex = self._tex_mean = (self.base[m].mean(0) * 255) if m.any() else np.array([200, 200, 190.0])
-            c = tuple(int(fa * fc[k] + (1 - fa) * tex[k]) for k in range(3))
+            if getattr(T, "BLEND", "over") == "multiply":
+                c = tuple(int(tex[k] * (1 - fa + fa * fc[k] / 255)) for k in range(3))
+            else:
+                c = tuple(int(fa * fc[k] + (1 - fa) * tex[k]) for k in range(3))
             yy = ly + i * 18 * s
             d.rectangle([lx, yy + 2 * s, lx + 14 * s, yy + 14 * s], fill=c + (230,), outline=(40, 40, 40, 120))
             d.text((lx + 20 * s, yy), name, font=f, fill=(25, 25, 25))

@@ -21,18 +21,22 @@ END = D("1918-11-11")
 
 # faction -> RGB, overlay alpha
 FACTIONS = {
-    # Italian Mapper's "World War I Every Day with Army Sizes": near-solid colours over a faint terrain
-    # texture, fitted to his frames (12 regions, mean error 0.9 levels)
-    "CP": ((102, 103, 83), 0.96),    # Central Powers (olive)
-    "CPC": ((140, 146, 123), 0.95),  # Central Powers client states (lighter olive-grey)
-    "ENT": ((97, 129, 172), 0.97),   # Entente / Allies (steel blue)
-    "SOV": ((165, 109, 86), 0.95),   # Soviet Russia (terracotta)
-    "OUT": ((229, 219, 206), 0.94),  # signed an armistice (back to neutral)
+    # Italian Mapper's WW1: his map template multiplied by one colour per side (fitted to his frames;
+    # a plain opacity blend cannot reproduce them). Neutral countries show the template as it is.
+    "CP": ((117, 122, 103), 1.0),    # Central Powers (olive)
+    "CPC": ((162, 171, 150), 1.0),   # Central Powers client states (lighter olive-grey)
+    "ENT": ((114, 151, 207), 1.0),   # Entente / Allies (steel blue)
+    "SOV": ((190, 130, 107), 1.0),   # Soviet Russia (terracotta)
+    "OUT": ((255, 255, 255), 0.0),   # signed an armistice (back to neutral)
 }
-NEUTRAL = ((229, 219, 206), 0.94)   # neutral countries: warm cream
+NEUTRAL = ((255, 250, 243), 1.0)    # neutral countries: the template, very slightly warmed (fitted)
+BLEND = "multiply"
+RAIL_STRENGTH = 0.7                 # his railways are thin, near-black lines
+RAIL_LEVEL = 0.1
+SHOW_LEGEND = False                 # his WW1 video has no legend
 ADVANCE_STYLE = "smooth"            # Italian Mapper's WW1: rounded bulges (Christopher's WW2: "fingers")
 NUMBER_FONT = "LiberationSans-Bold.ttf"  # Arial-style bold, as in his WW1 video
-NUMBER_SIZE = 13.0                  # px at 1280 wide (19.5 px at 1080p), measured from his "91.645"
+NUMBER_SIZE = 13.5                  # px at 1280 wide: ~20 px at 1080p, the same for every army (measured)
 LABEL_SETBACK = 13.0                # px at 1280 wide: his numbers sit close to the front
 LEGEND = [("CP", "Central Powers", None), ("CPC", "Central Powers client states", "1916-11-05"),
           ("ENT", "Allied Powers", None),
