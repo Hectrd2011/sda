@@ -4,3 +4,4 @@ f/
 hq/
 *.png
 *.npy
+__pycache__/
