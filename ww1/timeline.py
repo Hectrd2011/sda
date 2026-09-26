@@ -21,11 +21,13 @@ END = D("1918-11-11")
 
 # faction -> RGB, overlay alpha
 FACTIONS = {
-    "CP": ((72, 78, 56), 0.72),      # Central Powers
-    "ENT": ((41, 109, 187), 0.66),   # Entente / Allies (blends to the reference's Allied blue 111,155,204)
-    "CPC": ((150, 158, 118), 0.62),  # Central Powers client states (lighter tint, like Italian Mapper)
-    "SOV": ((150, 70, 34), 0.66),    # Soviet Russia (blends to the reference's Soviet 183,130,103)
-    "OUT": ((150, 150, 140), 0.18),  # signed armistice
+    # overlay colour and opacity over the satellite texture, fitted to Christopher's WW2 map (13 regions,
+    # mean error 1.5 levels): Axis -> Central Powers, Western Allies -> Entente, USSR -> Soviet Russia
+    "CP": ((103, 71, 74), 0.45),     # Central Powers: dark film, green terrain shows through
+    "CPC": ((222, 222, 212), 0.5),   # Central Powers client states (lighter)
+    "ENT": ((74, 125, 248), 0.56),   # Entente / Allies
+    "SOV": ((210, 120, 97), 0.73),   # Soviet Russia (from the October Revolution)
+    "OUT": ((236, 232, 222), 0.66),  # signed an armistice
 }
 LEGEND = [("CP", "Central Powers", None), ("CPC", "Central Powers client states", "1916-11-05"),
           ("ENT", "Allied Powers", None),

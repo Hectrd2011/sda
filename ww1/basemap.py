@@ -54,7 +54,17 @@ NE_URLS = {
     "ne_50m_lakes": "https://naturalearth.s3.amazonaws.com/50m_physical/ne_50m_lakes.zip",
     "ne_50m_rivers_lake_centerlines": "https://naturalearth.s3.amazonaws.com/50m_physical/ne_50m_rivers_lake_centerlines.zip",
     "ne_10m_railroads": "https://naturalearth.s3.amazonaws.com/10m_cultural/ne_10m_railroads.zip",
+    "ne_10m_urban_areas": "https://naturalearth.s3.amazonaws.com/10m_cultural/ne_10m_urban_areas.zip",
 }
+# NASA Blue Marble Next Generation, July 2004 (public domain), the satellite texture under the map
+BLUE_MARBLE = ("bm_200407.jpg",
+               "https://eoimages.gsfc.nasa.gov/images/imagerecords/74000/74092/world.200407.3x21600x10800.jpg")
+# Fitted to Christopher's WW2 map (4K, 13 regions, mean error 1.5 levels): the texture is the satellite
+# image with its contrast boosted, T = clip(TEX_P + TEX_Q * bluemarble); every area is then
+# alpha * colour + (1 - alpha) * T  (neutral land: alpha 0.77 of a cream).
+TEX_P = (24.0, 40.0, 79.0)
+TEX_Q = 2.27
+NEUTRAL = ((246, 241, 230), 0.77)
 
 # 1914 polity name -> country key used by the timeline.
 NAME_KEYS = {
@@ -311,19 +321,44 @@ def build(W=1280, H=720, view="europe"):
     ids = ids[iy, ix]
     ids[~landmask] = 0
 
-    # ---- terrain --------------------------------------------------------------
+    # ---- terrain: contrast-boosted satellite texture ---------------------------
     Image.MAX_IMAGE_PIXELS = None
-    sr = np.asarray(Image.open(os.path.join(DL, "SR_50M", "SR_50M.tif")), np.float32)
+    bm_path = os.path.join(DL, BLUE_MARBLE[0])
+    if not os.path.exists(bm_path):
+        import urllib.request
+        urllib.request.urlretrieve(BLUE_MARBLE[1], bm_path)
     lon, lat = fr.lonlat_grid()
-    col = ((lon + 179.98333) % 360.0) / 0.0333333
-    row = (89.98333 - lat) / 0.0333333
-    relief = ndimage.map_coordinates(sr, [row, col], order=1) / 255.0
-    rel = np.clip((relief - 0.55) * 1.3 + 0.8, 0.45, 1.06)
-
-    land_rgb = np.array([234, 232, 224], np.float32) / 255.0
-    rng = np.random.default_rng(3)
-    grain = ndimage.gaussian_filter(rng.normal(0, 1, (H, W)).astype(np.float32), 1.2) * 0.02
-    landc = land_rgb[None, None, :] * (rel[..., None] + grain[..., None])
+    lon = ((lon + 180.0) % 360.0) - 180.0
+    bmi = Image.open(bm_path)
+    BW, BH = bmi.size
+    cx = (lon + 180.0) / 360.0 * BW - 0.5
+    cy = (90.0 - lat) / 180.0 * BH - 0.5
+    x0, x1 = max(0, int(np.floor(cx.min())) - 2), min(BW, int(np.ceil(cx.max())) + 3)
+    y0, y1 = max(0, int(np.floor(cy.min())) - 2), min(BH, int(np.ceil(cy.max())) + 3)
+    crop = np.asarray(bmi.crop((x0, y0, x1, y1)), np.float32)
+    del bmi
+    # pre-blur a little where the output is coarser than the source (avoids sparkle)
+    sat = np.stack([ndimage.map_coordinates(crop[..., c], [cy - y0, cx - x0], order=1, mode="nearest")
+                    for c in range(3)], -1)
+    # the Caspian is missing from the lake data: take it from the satellite image instead
+    casp = (lon > 46.0) & (lon < 55.5) & (lat > 36.3) & (lat < 47.6)
+    wet = casp & (sat.mean(-1) < 95) & (sat[..., 2] >= sat[..., 0] - 4)
+    wet = ndimage.binary_opening(ndimage.binary_closing(wet, iterations=2), iterations=1)
+    if wet.any():
+        land_a = np.where(wet, 0.0, land_a).astype(np.float32)
+        land_a = np.minimum(land_a, ndimage.gaussian_filter(land_a, 0.5))
+        ids[wet] = 0
+    tex = np.clip(np.array(TEX_P, np.float32) + TEX_Q * sat, 0, 255)
+    # cities: dark blots, like the reference
+    urban = Image.new("L", (W * SS, H * SS), 0)
+    ud = ImageDraw.Draw(urban)
+    for r in shp_rings(os.path.join(DL, "ne_10m_urban_areas", "ne_10m_urban_areas.shp")):
+        for p in fr.split_polygon(SPolygon(r).buffer(0)):
+            ud.polygon(fr.pts(p.exterior.coords, SS), fill=255)
+    urban_a = np.asarray(urban.resize((W, H), Image.BOX), np.float32) / 255.0
+    urban_a = ndimage.gaussian_filter(urban_a, 0.6 * W / 1920) * land_a
+    tex = tex * (1 - 0.55 * urban_a[..., None]) + np.array([70, 62, 55], np.float32) * 0.55 * urban_a[..., None]
+    landc = tex / 255.0
 
     water_rgb = np.array([219, 230, 242], np.float32) / 255.0  # as in the reference
     yy, xx = np.mgrid[0:H, 0:W]
@@ -366,7 +401,7 @@ def build(W=1280, H=720, view="europe"):
     rails = []
     sf = shapefile.Reader(os.path.join(DL, "ne_10m_railroads", "ne_10m_railroads.shp"))
     for sr in sf.iterShapeRecords():
-        if sr.record["category"] not in (1, 2):
+        if sr.record["category"] not in (1,):
             continue
         s = sr.shape
         parts = list(s.parts) + [len(s.points)]

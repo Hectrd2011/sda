@@ -370,12 +370,9 @@ class Renderer:
                 if d < since:
                     prev = f2
             fade = min(1.0, max(0.0, (day - since) / 3.0))
-            ca = (np.array(T.FACTIONS[fac][0], np.float32) / 255, T.FACTIONS[fac][1]) if fac else (np.zeros(3), 0.0)
-            cp = (np.array(T.FACTIONS[prev][0], np.float32) / 255, T.FACTIONS[prev][1]) if prev else (np.zeros(3), 0.0)
-            if prev is None:
-                cp = (ca[0], 0.0)
-            if fac is None:
-                ca = (cp[0], 0.0)
+            neutral = (np.array(bm.NEUTRAL[0], np.float32) / 255, bm.NEUTRAL[1])  # cream wash over the texture
+            ca = (np.array(T.FACTIONS[fac][0], np.float32) / 255, T.FACTIONS[fac][1]) if fac else neutral
+            cp = (np.array(T.FACTIONS[prev][0], np.float32) / 255, T.FACTIONS[prev][1]) if prev else neutral
             lut_c[idx] = cp[0] * (1 - fade) + ca[0] * fade
             lut_a[idx] = cp[1] * (1 - fade) + ca[1] * fade
             lut_f[idx] = self.fac_code[fac] if fade > 0.5 else self.fac_code[prev]
@@ -512,7 +509,7 @@ class Renderer:
     def _static_overlay(self):
         """Railways then pink borders, folded into one multiply/add pair (computed once)."""
         if not hasattr(self, "_ov_mul"):
-            kr = self.rail[..., None] * np.float32(0.42)
+            kr = self.rail[..., None] * np.float32(0.38)
             kb = self.border[..., None] * np.float32(0.55)
             self._ov_mul = ((1 - kr) * (1 - kb)).astype(np.float32)
             self._ov_add = (np.float32(0.12) * kr * (1 - kb)
@@ -845,7 +842,12 @@ class Renderer:
         items = [(fac, name) for fac, name, since in T.LEGEND if since is None or day >= T.as_day(since)]
         lx, ly = W - 205 * s, H - 16 * s - 18 * s * len(items)
         for i, (fac, name) in enumerate(items):
-            c = T.FACTIONS[fac][0]
+            fc, fa = T.FACTIONS[fac]
+            tex = getattr(self, "_tex_mean", None)
+            if tex is None:
+                m = self.land > 0.9
+                tex = self._tex_mean = (self.base[m].mean(0) * 255) if m.any() else np.array([200, 200, 190.0])
+            c = tuple(int(fa * fc[k] + (1 - fa) * tex[k]) for k in range(3))
             yy = ly + i * 18 * s
             d.rectangle([lx, yy + 2 * s, lx + 14 * s, yy + 14 * s], fill=c + (230,), outline=(40, 40, 40, 120))
             d.text((lx + 20 * s, yy), name, font=f, fill=(25, 25, 25))
