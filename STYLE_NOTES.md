@@ -45,6 +45,25 @@ This is how the renderers in this repo should behave.
 - To do: our fronts are single keyframed lines, so fast advances don't show spearheads unless they're drawn
   into the keyframes. A generator that bulges an advancing front into rounded thrusts would help.
 
+## Measured values (Christopher's WW2 in 4K vs our renderer; tools in study/)
+These were measured with `study/ref_metrics.py` and `study/fitcap.py` and fitted into `ww1/render.py`.
+
+| What | Christopher | Ours now |
+|---|---|---|
+| Pace | 2.76 days/s, steady, no slow-downs | 2.75 days/s, steady |
+| Soviet colour on land | (183,130,103) | (183,129,103) |
+| Axis / Central Powers | (120,125,108) | (121,124,106) |
+| Western Allies | (111,155,204) | set to blend to (111,155,204) |
+| Sea | (219,230,242) | (219,230,242) |
+| Captured pixel, old → new colour | ~30% at +0.1 s, 72% at +0.6 s, 90% at +1.0 s | within about ±0.05 of that |
+| Pale fringe (cream 251,230,218) | peaks ~0.7 at +0.2 s, gone by +0.4 s | peaks ~0.66 at +0.2 s, gone by +0.5 s |
+| Front line | ~2 px light line, brightest on the lighter bloc's side | thin light line on the Allied/Soviet side, crisp on moving stretches |
+| Advance shape | long, irregular thrusts and pockets | irregular thrusts along the direction of advance, only where the front moves more than ~12 px in 10 days |
+
+How his advance really works: Christopher draws a keyframe roughly every 1.6 days. The ground that the next
+keyframe will take shows as a see-through pale patch over the defender's colour, and the front sweeps across
+it. Ours does the same (`PREVIEW_STEP`).
+
 ## Army numbers
 - **Exactly one pair per front.** One number sits on each side, mirrored across the line at the same point
   along it, usually near the middle of the front.
