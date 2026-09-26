@@ -1,8 +1,11 @@
 # Style notes: "Every Day with Army Sizes"
 
-What Italian Mapper (Christopher) does in *World War II*, *World War I* and *Napoleonic Wars Every Day with
-Army Sizes*. I checked these frame by frame (144p copies) and against vidIQ's scene analysis. This is how
-the renderers in this repo should behave.
+What Christopher (the original *World War II Every Day with Army Sizes*) and Italian Mapper (the WW1 and
+Napoleonic variations) do.
+- The WW2 video was studied frame by frame in **4K** (archive.org copy of YouTube 1CqGeAmVu1I).
+- WW1 and the Napoleonic Wars were studied at 144p, together with vidIQ's scene analysis.
+
+This is how the renderers in this repo should behave.
 
 ## Map
 - **The camera never moves.** One fixed view of the whole theatre, with no zoom or pan.
@@ -27,14 +30,30 @@ the renderers in this repo should behave.
 - When a country joins or leaves the war, its colour changes quickly. At an armistice, the whole map fades
   to neutral.
 
+## How an advance looks (Christopher's WW2 in 4K: Barbarossa, June–July 1941)
+- The attacker pushes in **long, rounded spearheads**, like fingers reaching deep into enemy land, instead of
+  one line moving forward evenly.
+- Enemy **pockets** are left behind as islands inside the attacker's land (Białystok, Minsk). They get the same
+  outline and shrink smoothly, with a spinning dashed circle and a fading "300.000 Encircled" label.
+- The **front line** is a soft white/cream line, about 2 px at 1080p.
+- **Fresh ground** first shows a pale cream fringe that fades into the conqueror's colour over a few days
+  (what our capture band does).
+- **Pre-war borders** stay visible as thin pink lines inside conquered land.
+- Base map: satellite-style terrain under a see-through bloc colour, cities as dark dots, roads and rails as
+  thin dark lines. The sea has fine diagonal hatching.
+- Captions cross-fade when one replaces another.
+- To do: our fronts are single keyframed lines, so fast advances don't show spearheads unless they're drawn
+  into the keyframes. A generator that bulges an advancing front into rounded thrusts would help.
+
 ## Army numbers
 - **Exactly one pair per front.** One number sits on each side, mirrored across the line at the same point
   along it, usually near the middle of the front.
-- **Set back from the line** by about 3–4% of the screen width, never touching it.
-- **Parallel to the front**, including steep fronts (up to about 75°). Text always reads left to right and
-  never flips upside down.
-- **Every number is the same size**, whatever the army's size.
-- White, clean sans-serif, with dots as thousands separators (2.734.704) and a subtle shadow.
+- **Set back from the line** by about 4–5% of the screen width (80–105 px at 1080p), never touching it.
+- **Parallel to the front.** On steep north–south fronts, both numbers read **top to bottom** (rotated
+  clockwise), so they never flip when the front wobbles around vertical.
+- **Every number is the same size**, whatever the army's size, at about 30 px text height at 1080p.
+- **Open Sans Bold**, white, with a soft dark outline tinted with the side's own colour (dark red for the
+  Soviets). Dots are the thousands separators (3.584.536).
 - Numbers count up and down smoothly on every frame. They fade in when a front opens and out when it closes.
 
 ## Text
@@ -48,9 +67,12 @@ the renderers in this repo should behave.
   battles; captions and speeches carry the big moments instead.
 
 ## What changed in our renderer (ww1/render.py)
-- Numbers are one fixed size, set back from the line (`LABEL_SETBACK`), and parallel to the front up to
-  about 75°, instead of being capped at 45°.
-- A front's two numbers share one anchor, so they sit as a mirrored pair.
-- If a front bends toward a number, the number slides further back so no part of it ever touches the line.
+- Numbers are one fixed, bigger size in Open Sans Bold, with an outline tinted by the side's colour.
+- They're set back from the line (`LABEL_SETBACK`, less on short fronts) and parallel to it.
+- Steep fronts read top to bottom. The reading direction is worked out day by day, with a margin so it
+  rarely flips; when it does, the numbers fade out and back in.
+- A front's two numbers share one anchor and one direction, so they sit as a mirrored pair.
+- A number slides back if the nearby stretch of front bends toward it. It moves closer if it would spill
+  off its own side's land, and it always stays on screen.
 - New "client state" faction (`CPC`) with a lighter tint: Kingdom of Poland (Nov 1916) and Ukraine (1918).
 - Steel-blue Entente colour.
