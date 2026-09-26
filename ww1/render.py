@@ -33,7 +33,8 @@ MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", 
 END_DAY = T.day_index(T.END) + 11 / 24  # 11:00 on 11 November 1918
 
 
-LABEL_SETBACK = 42.0  # px at 1280 wide
+LABEL_SETBACK = 58.0  # px at 1280 wide (about 4.5% of the screen width, like the reference)
+NUM_FONT = "OpenSans-Bold.ttf"  # the numbers' typeface in the reference videos
 
 
 def ffmpeg_exe():
@@ -395,6 +396,7 @@ class Renderer:
         out += add
         # light outline where two warring factions meet (only touches the outline pixels)
         fac = pal_f[idx]
+        self._facmap = fac  # which bloc holds each pixel, used to keep numbers on their own side
         e = np.zeros((H, W), bool)
         dx = (fac[:, 1:] != fac[:, :-1]) & (fac[:, 1:] > 0) & (fac[:, :-1] > 0)
         dy = (fac[1:, :] != fac[:-1, :]) & (fac[1:, :] > 0) & (fac[:-1, :] > 0)
@@ -421,20 +423,21 @@ class Renderer:
             0.0015 * math.sin(day * 7.1 + seed * 5)
         return int(v * jitter)
 
-    def draw_rotated_text(self, img, text, cx, cy, angle, size, alpha=1.0):
-        """White number with a soft drop shadow, rotated to follow the front."""
+    def draw_rotated_text(self, img, text, cx, cy, angle, size, alpha=1.0, shade=(20, 20, 20)):
+        """White number with a soft dark outline (tinted with its side's colour), rotated to follow the front."""
         s = self.s
-        f = self.font("LiberationSans-Bold.ttf", size)
+        f = self.font(NUM_FONT, size)
         bb = f.getbbox(text)
         pad = int(6 * s)
         w, h = bb[2] - bb[0] + 2 * pad, bb[3] - bb[1] + 2 * pad
         sh = Image.new("L", (w, h), 0)
-        ImageDraw.Draw(sh).text((pad - bb[0] + s, pad - bb[1] + s), text, font=f, fill=int(170 * alpha))
-        sh = sh.filter(ImageFilter.GaussianBlur(1.1 * s))
+        ImageDraw.Draw(sh).text((pad - bb[0] + 0.6 * s, pad - bb[1] + 0.6 * s), text, font=f, fill=int(200 * alpha),
+                                stroke_width=max(1, int(1.2 * s)), stroke_fill=int(200 * alpha))
+        sh = sh.filter(ImageFilter.GaussianBlur(0.9 * s))
         t = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         t.putalpha(sh)
         t = Image.alpha_composite(Image.new("RGBA", (w, h), (0, 0, 0, 0)),
-                                  Image.merge("RGBA", (*Image.new("RGB", (w, h), (20, 20, 20)).split(), sh)))
+                                  Image.merge("RGBA", (*Image.new("RGB", (w, h), tuple(shade)).split(), sh)))
         ImageDraw.Draw(t).text((pad - bb[0], pad - bb[1]), text, font=f, fill=(255, 255, 255, int(255 * alpha)))
         r0 = t.rotate(angle, resample=Image.BICUBIC, expand=True)
         x, y = cx - r0.width / 2, cy - r0.height / 2
@@ -453,10 +456,16 @@ class Renderer:
             for lab in fr["labels"]:
                 v = self.army_value(lab, day)
                 alpha = min(1.0, (day - lab["army"][0][0] + 0.5) / 3.0)
+                # fade out and back in around a (rare) change of reading direction
+                flips = self.fold_table(fr)[1]
+                if flips:
+                    alpha *= min(1.0, min(abs(day - f) for f in flips) / 0.6)
                 if v <= 0 or alpha <= 0:
                     continue
                 p1, ang = self.label_pose(fr, lab, day, v)
-                cands.append((v, p1, ang, alpha, id(lab)))
+                occ = fr["sides"][lab["side"]]["occ"]
+                shade = tuple(int(c * 0.35) for c in T.FACTIONS[occ][0]) if occ in T.FACTIONS else (20, 20, 20)
+                cands.append((v, p1, ang, alpha, id(lab), shade))
         # fixed-position numbers (colonial campaigns, Tsingtao): drawn level
         for lab in [l for p in self.pockets for l in p["labels"]] + self.point_labels:
             v = self.army_value(lab, day)
@@ -465,12 +474,12 @@ class Renderer:
                 continue
             hx = T.interp_series([(k, q[0]) for k, q in lab["hint"]], day)
             hy = T.interp_series([(k, q[1]) for k, q in lab["hint"]], day)
-            cands.append((v, (hx, hy), 0.0, alpha, id(lab)))
+            cands.append((v, (hx, hy), 0.0, alpha, id(lab), (20, 20, 20)))
         # Numbers never overlap: bigger armies claim their space first; a number that would
         # collide fades out (and back in once there is room) instead of piling on top.
         vis = getattr(self, "_label_vis", {})
         placed = []
-        for v, p, ang, alpha, key in sorted(cands, key=lambda c: -c[0]):
+        for v, p, ang, alpha, key, shade in sorted(cands, key=lambda c: -c[0]):
             box = self.number_box(v, p, ang)
             free = not any(box.intersects(b) for b in placed)
             if free:
@@ -479,18 +488,18 @@ class Renderer:
             cur = min(1.0, cur + 0.15) if free else max(0.0, cur - 0.15)
             vis[key] = cur
             if cur > 0.01:
-                self.draw_number(img, v, p, ang, alpha * cur)
+                self.draw_number(img, v, p, ang, alpha * cur, shade)
         self._label_vis = vis
 
     def number_size(self, v):
         # one size for every army, like Italian Mapper's videos
-        return 15.5 * self.ls * self.s
+        return 20.0 * self.ls * self.s
 
     def number_box(self, v, p, ang):
         """Rotated rectangle covered by a number (with a little breathing room)."""
         txt = f"{v:,}".replace(",", ".")
         size = self.number_size(v)
-        w = self.font("LiberationSans-Bold.ttf", size).getlength(txt) / 2 + 3 * self.s
+        w = self.font(NUM_FONT, size).getlength(txt) / 2 + 3 * self.s
         h = size * 0.6 + 2 * self.s
         a = math.radians(-ang)
         ux, uy = math.cos(a), math.sin(a)
@@ -499,9 +508,49 @@ class Renderer:
         return Polygon([(cx + sx * w * ux + sy * h * vx, cy + sx * w * uy + sy * h * vy)
                         for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))])
 
-    def draw_number(self, img, v, p, ang, alpha):
+    def draw_number(self, img, v, p, ang, alpha, shade=(20, 20, 20)):
         txt = f"{v:,}".replace(",", ".")
-        self.draw_rotated_text(img, txt, p[0], p[1], ang, self.number_size(v), alpha)
+        self.draw_rotated_text(img, txt, p[0], p[1], ang, self.number_size(v), alpha, shade)
+
+    def raw_front_dir(self, fr, d):
+        """Direction (math degrees, line order) of the front around its number pair's anchor."""
+        line, _ = self.front_line(fr, d)
+        pair = fr["labels"]
+        hint = np.mean([[T.interp_series([(k, p[0]) for k, p in l["hint"]], d),
+                         T.interp_series([(k, p[1]) for k, p in l["hint"]], d)] for l in pair], axis=0)
+        d2 = ((line - hint) ** 2).sum(1)
+        sig = 28.0 * self.s
+        w = np.exp(-(d2 - d2.min()) / (2 * sig * sig))
+        idx = np.arange(len(line))
+        span = fr["label_span"]
+        tan = line[np.minimum(idx + span, len(line) - 1)] - line[np.maximum(idx - span, 0)]
+        tan /= (np.linalg.norm(tan, axis=1, keepdims=True) + 1e-9)
+        t = (w[:, None] * tan).sum(0)
+        return -math.degrees(math.atan2(t[1], t[0]))
+
+    def fold_table(self, fr):
+        """Per day: whether the pair's numbers read along or against line order, plus the flip days.
+        Numbers read left to right or, on steep fronts, top to bottom (angles in (-110, 70]); an
+        orientation is kept until it is 20 degrees past that range, so it rarely flips."""
+        if "_fold" in fr:
+            return fr["_fold"]
+        table, flips, cur = {}, [], None
+        if fr["labels"]:
+            d0 = int(math.floor(min(l["army"][0][0] for l in fr["labels"]))) - 7
+            d1 = int(math.ceil(max(l["army"][-1][0] for l in fr["labels"]))) + 7
+            for d in range(d0, d1 + 1):
+                a = self.raw_front_dir(fr, d)
+                def ok(o, lo, hi):
+                    x = (a + 180.0 * o + 180.0) % 360.0 - 180.0
+                    return lo < x <= hi
+                if cur is None:
+                    cur = 0 if ok(0, -110.0, 70.0) else 1
+                elif not ok(cur, -130.0, 90.0):
+                    cur = 1 - cur
+                    flips.append(d)
+                table[d] = cur
+        fr["_fold"] = (table, flips)
+        return fr["_fold"]
 
     def label_pose(self, fr, lab, day, v):
         """Position/angle of an army label. Smoothed over +-6 days and aimed along a long chord of
@@ -529,39 +578,71 @@ class Renderer:
             nrm = np.stack([-tan[:, 1], tan[:, 0]], 1) * sign  # side's territory is left of travel
             pos.append((w[:, None] * line).sum(0) / w.sum())
             nrms.append((w[:, None] * nrm).sum(0) / w.sum())
-            tan = np.where((tan @ lab["refdir"])[:, None] >= 0, tan, -tan)
+            # line order gives every point the same orientation, so both numbers of a pair get the
+            # same direction; the reading direction is decided afterwards
             dirs.append((w[:, None] * tan).sum(0) / w.sum())
         base = np.average(pos, axis=0, weights=wts)
         n = np.average(nrms, axis=0, weights=wts)
         n /= np.linalg.norm(n) + 1e-9
         t = np.average(dirs, axis=0, weights=wts)
         front = -math.degrees(math.atan2(t[1], t[0]))
-        if front > 90:
-            front -= 180
-        elif front < -90:
-            front += 180
-        # Parallel to the front like the reference, easing off only for near-vertical fronts (max ~75 deg)
-        ang = 75.0 * math.tanh(front / 75.0)
+        # Parallel to the front, reading direction from the front's day-by-day table (see fold_table):
+        # steep fronts read top to bottom, and the direction only flips when it really must.
+        if self.fold_table(fr)[0].get(int(math.floor(day)), 0):
+            front += 180.0
+        front = (front + 180.0) % 360.0 - 180.0
+        ang = front
         # push the number far enough from the line that its (less tilted) box does not cross it
         size = self.number_size(v)
-        half_w = self.font("LiberationSans-Bold.ttf", size).getlength(f"{v:,}") / 2
+        half_w = self.font(NUM_FONT, size).getlength(f"{v:,}") / 2
         rel = math.radians(front - ang)
         clear = half_w * abs(math.sin(rel)) + 0.6 * size * abs(math.cos(rel))
         # set well back from the line (about 3-4% of the screen width), as a mirrored pair across the front
-        off = max(fr["label_off"] * self.s * self.ls, LABEL_SETBACK * self.s * self.ls, clear + 4 * self.s * self.ls)
         # where the front bends toward the number (salients, coasts), slide it further back until no
         # part of the text comes near the line; distances change smoothly, so the number glides
         from shapely.geometry import LineString, Point
-        line_now = LineString(self.front_line(fr, day)[0])
+        line_arr = self.front_line(fr, day)[0]
+        line_now = LineString(line_arr)
+        # long fronts get the full setback; short ones keep their numbers close (small countries)
+        setback = min(LABEL_SETBACK * self.s * self.ls, 0.1 * line_now.length)
+        off = max(fr["label_off"] * self.s * self.ls, setback, clear + 4 * self.s * self.ls)
         u = np.array([math.cos(math.radians(ang)), -math.sin(math.radians(ang))])
         need = 0.6 * size + 3 * self.s * self.ls
+        # keep the number on its own side's land: on small fronts, come closer to the line instead of
+        # spilling over neutral countries or the sea
+        fm = getattr(self, "_facmap", None)
+        occ = fr["sides"][lab["side"]]["occ"]
+        if fm is not None and occ in self.fac_code:
+            own = self.fac_code[occ]
+            H, W = fm.shape
+            def inside(o):
+                pts = [base + n * o + u * t for t in np.linspace(-half_w, half_w, 11)]
+                return np.mean([0 <= p[0] < W and 0 <= p[1] < H and fm[int(p[1]), int(p[0])] == own for p in pts])
+            lo = clear + 4 * self.s * self.ls
+            if off > lo and inside(off) < 0.8:
+                cand = [(o, inside(o)) for o in np.linspace(off, lo, 16)]
+                good = [o for o, f in cand if f >= 0.8]
+                off = max(good) if good else max(cand, key=lambda c: (c[1], -c[0]))[0]
+        # only the stretch of front next to the number counts (a front can wrap around a small country)
+        i0 = int(np.argmin(((line_arr - base) ** 2).sum(1)))
+        step = np.median(np.linalg.norm(np.diff(line_arr, axis=0), axis=1)) + 1e-6
+        k = max(8, int(1.6 * half_w / step))
+        near = line_arr[max(0, i0 - k):i0 + k + 1]
         for _ in range(4):
-            pts = [base + n * off + u * t for t in np.linspace(-half_w, half_w, 11)]
-            dmin = min(line_now.distance(Point(*p)) for p in pts)
+            if len(near) == 0:
+                break
+            pts = np.array([base + n * off + u * t for t in np.linspace(-half_w, half_w, 11)])
+            dmin = np.sqrt(((pts[:, None, :] - near[None, :, :]) ** 2).sum(2)).min()
             if dmin >= need:
                 break
             off += (need - dmin) * 1.2
-        return base + n * off, ang
+        pos = base + n * off
+        # keep the whole number on screen (and clear of the caption strip at the bottom)
+        a = math.radians(ang)
+        ex = abs(half_w * math.cos(a)) + abs(0.6 * size * math.sin(a)) + 6 * self.s
+        ey = abs(half_w * math.sin(a)) + abs(0.6 * size * math.cos(a)) + 6 * self.s
+        pos = np.array([min(max(pos[0], ex), self.W - ex), min(max(pos[1], ey), self.H - 44 * self.s - ey)])
+        return pos, ang
 
     def draw_markers(self, img, day, vt):
         s = self.s
