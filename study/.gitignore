@@ -5,3 +5,4 @@ hq/
 *.png
 *.npy
 __pycache__/
+template/

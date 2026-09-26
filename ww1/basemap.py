@@ -320,11 +320,42 @@ def build(W=1280, H=720, view="europe"):
             ld.polygon(fr.pts(p.exterior.coords, SS), fill=255)
         coast.append(r)  # outline from the original ring (split_line handles the seam)
     lakes = []
+    lake = Image.new("L", (W * SS, H * SS), 0)
+    lkd = ImageDraw.Draw(lake)
     for r in shp_rings(os.path.join(DL, "ne_50m_lakes", "ne_50m_lakes.shp")):
         for p in fr.split_polygon(SPolygon(r).buffer(0)):
             ld.polygon(fr.pts(p.exterior.coords, SS), fill=0)
+            lkd.polygon(fr.pts(p.exterior.coords, SS), fill=255)
         lakes.append(r)
     land_a = np.asarray(land.resize((W, H), Image.BOX), np.float32) / 255.0
+    lake_a = np.asarray(lake.resize((W, H), Image.BOX), np.float32) / 255.0
+    lon, lat = fr.lonlat_grid()
+    lon = ((lon + 180.0) % 360.0) - 180.0
+    # Italian Mapper's own map template (white land + satellite layer at 45/255), when it is present.
+    # Its coastline replaces Natural Earth's, so the countries line up exactly with its terrain.
+    tpath = os.path.join(DL, "im_template_europe.npz")
+    use_template = vname == "europe" and os.path.exists(tpath)   # the template crop covers Europe only
+    if use_template:
+        Tm = np.load(tpath)
+        x0c, kxt, yeqt, kyt = Tm["proj"]
+        bx0, by0 = Tm["box"][:2]
+        txp = x0c + kxt * lon - bx0
+        typ = yeqt - kyt * np.log(np.tan(np.pi / 4 + np.radians(np.clip(lat, -85, 85)) / 2)) - by0
+        step = float(np.median(np.abs(np.diff(txp, axis=1))))   # template px per output px
+        pre = (lambda a: ndimage.gaussian_filter(a, 0.45 * step)) if step > 1.2 else (lambda a: a)
+
+        def tsample(a, order=1, mode="nearest"):
+            return ndimage.map_coordinates(pre(a.astype(np.float32)), [typ, txp], order=order, mode=mode)
+        trgb = np.stack([tsample(Tm["rgb"][..., c]) for c in range(3)], -1)
+        # its coastline is hard-edged pixel art: smooth the steps away, then sharpen back to a ~1.2 px edge
+        tl = Tm["land"].astype(np.float32) / 255.0
+        if step <= 1.2:
+            tl = ndimage.gaussian_filter(tl, 0.8)
+        land_a = tsample(tl, mode="constant")
+        gain = max(1.0, 2.0 / step / 1.2)
+        land_a = np.clip((land_a - 0.5) * gain + 0.5, 0, 1)
+        # the template has no lakes (Ladoga is land), his videos do: cut them out of it
+        land_a = (land_a * (1 - lake_a)).astype(np.float32)
     landmask = land_a > 0.5
 
     ids_ss = np.asarray(idimg)
@@ -341,8 +372,6 @@ def build(W=1280, H=720, view="europe"):
     if not os.path.exists(bm_path):
         import urllib.request
         urllib.request.urlretrieve(BLUE_MARBLE[1], bm_path)
-    lon, lat = fr.lonlat_grid()
-    lon = ((lon + 180.0) % 360.0) - 180.0
     bmi = Image.open(bm_path)
     BW, BH = bmi.size
     cx = (lon + 180.0) / 360.0 * BW - 0.5
@@ -358,24 +387,13 @@ def build(W=1280, H=720, view="europe"):
     casp = (lon > 46.0) & (lon < 55.5) & (lat > 36.3) & (lat < 47.6)
     wet = casp & (sat.mean(-1) < 95) & (sat[..., 2] >= sat[..., 0] - 4)
     wet = ndimage.binary_opening(ndimage.binary_closing(wet, iterations=2), iterations=1)
-    if wet.any():
+    if wet.any() and not use_template:
         land_a = np.where(wet, 0.0, land_a).astype(np.float32)
         land_a = np.minimum(land_a, ndimage.gaussian_filter(land_a, 0.5))
         ids[wet] = 0
     tex = np.clip(np.array(TEX_P, np.float32) + TEX_Q * sat, 0, 255)
-    # Italian Mapper's own map template (white land + satellite layer at 45/255), when it is present
-    tpath = os.path.join(DL, "im_template_europe.npz")
-    use_template = os.path.exists(tpath)
     if use_template:
-        Tm = np.load(tpath)
-        x0c, kxt, yeqt, kyt = Tm["proj"]
-        bx0, by0 = Tm["box"][:2]
-        txp = x0c + kxt * lon - bx0
-        typ = yeqt - kyt * np.log(np.tan(np.pi / 4 + np.radians(np.clip(lat, -85, 85)) / 2)) - by0
-        trgb = np.stack([ndimage.map_coordinates(Tm["rgb"][..., c].astype(np.float32), [typ, txp], order=1, mode="nearest")
-                         for c in range(3)], -1)
-        tland = ndimage.map_coordinates(Tm["land"].astype(np.float32), [typ, txp], order=1, mode="constant") > 0.5
-        tex = np.where(tland[..., None], trgb, np.array([255, 252, 249], np.float32))
+        tex = trgb
     # cities: dark blots, like the reference
     urban = Image.new("L", (W * SS, H * SS), 0)
     ud = ImageDraw.Draw(urban)
@@ -425,7 +443,8 @@ def build(W=1280, H=720, view="europe"):
                 d.line(fr.pts(piece, SS), fill=255, width=width, joint="curve")
         return np.asarray(im.resize((W, H), Image.BOX), np.float32) / 255.0
 
-    coast_a = line_layer(coast + lakes, max(1, SS // 2))
+    # no drawn coastline with the template (Italian Mapper has none), and Natural Earth's would not line up with it
+    coast_a = np.zeros((H, W), np.float32) if use_template else line_layer(coast + lakes, max(1, SS // 2))
     e = np.zeros(ids_ss.shape, bool)
     e[:, 1:] |= (ids_ss[:, 1:] != ids_ss[:, :-1]) & (ids_ss[:, 1:] > 0) & (ids_ss[:, :-1] > 0)
     e[1:, :] |= (ids_ss[1:, :] != ids_ss[:-1, :]) & (ids_ss[1:, :] > 0) & (ids_ss[:-1, :] > 0)

@@ -35,6 +35,10 @@ END_DAY = T.day_index(T.END) + 11 / 24  # 11:00 on 11 November 1918
 
 
 HALO_FACTIONS = ("ENT", "SOV")  # the front glow sits on these blocs' side
+# front line: "halo" (Christopher's soft glow on one side) or "line" (Italian Mapper's crisp light line)
+FRONT_LINE = getattr(T, "FRONT_LINE", "halo")
+LINE_ALPHA, LINE_ALPHA_MOVING = getattr(T, "LINE_ALPHA", (0.62, 0.8))
+LINE_COLOUR = getattr(T, "LINE_COLOUR", (250, 238, 228))
 # number style: taken from the timeline when it sets one (Italian Mapper's WW1), else Christopher's WW2
 LABEL_SETBACK = getattr(T, "LABEL_SETBACK", 58.0)   # px at 1280 wide
 NUM_FONT = getattr(T, "NUMBER_FONT", "OpenSans-Bold.ttf")
@@ -458,7 +462,7 @@ class Renderer:
     # the defender's colour, fading in at the start of the step; the front then sweeps through it.
     PREVIEW_STEP = 1.6      # days between preview steps (the reference's keyframe rhythm)
     PREVIEW_FADE_IN = 0.5   # days
-    PREVIEW_ALPHA = 0.55
+    PREVIEW_ALPHA = getattr(T, "PREVIEW_ALPHA", 0.55)   # 0: no preview patch (Italian Mapper)
     SETTLE = 0.5            # days: captured land blends from the old colour into the new one
 
     def _codes_at(self, day, lut_f):
@@ -554,28 +558,39 @@ class Renderer:
         fac = pal_f[idx]
         self._facmap = fac  # which bloc holds each pixel, used to keep numbers on their own side
         e = np.zeros((H, W), bool)
-        dx = (fac[:, 1:] != fac[:, :-1]) & (fac[:, 1:] > 0) & (fac[:, :-1] > 0)
-        dy = (fac[1:, :] != fac[:-1, :]) & (fac[1:, :] > 0) & (fac[:-1, :] > 0)
+        war = (fac > 0) & (fac != self.fac_code["OUT"])   # countries out of the war get no front line
+        dx = (fac[:, 1:] != fac[:, :-1]) & war[:, 1:] & war[:, :-1]
+        dy = (fac[1:, :] != fac[:-1, :]) & war[1:, :] & war[:-1, :]
         e[:, 1:] |= dx
         e[:, :-1] |= dx
         e[1:, :] |= dy
         e[:-1, :] |= dy
-        # Front line as in the reference: no hard stroke, just a thin soft light line on the lighter
-        # bloc's side (Allies, Soviets), about 2 px at 1080p.
-        halo_side = np.isin(fac, [self.fac_code[f] for f in HALO_FACTIONS if f in self.fac_code])
         ef = e.astype(np.float32)
         px = self.s / 1.5  # 1080p pixels
-        thin = ndimage.gaussian_filter(ef, 2.2 * px)
-        thin /= max(thin.max(), 1e-6)
-        soft = ndimage.gaussian_filter(ef, 6.0 * px)
-        soft /= max(soft.max(), 1e-6)
-        k = (0.16 * np.minimum(1.0, 1.8 * thin) + 0.1 * np.minimum(1.0, 2.0 * soft)) * halo_side * self.land
-        # moving stretches get the reference's crisp bright outline (both sides of the border, ~2 px)
         mot = getattr(self, "_motion", None)
-        if mot is not None:
-            crisp = np.minimum(1.0, ndimage.gaussian_filter(ef, 0.7 * px) * 2.2)
-            k = np.maximum(k, 0.8 * crisp * mot * self.land)
-        glow = np.array((250 / 255, 238 / 255, 228 / 255), np.float32)
+        if FRONT_LINE == "line":
+            # Italian Mapper: a crisp light line about 2 px wide (at 1080p) on every active front, brighter
+            # where the front is moving, with a faint glow on both sides (measured on his frames)
+            line = np.minimum(1.0, ndimage.gaussian_filter(ef, 0.55 * px) * 1.2 * px)
+            soft = ndimage.gaussian_filter(ef, 2.2 * px)
+            soft = np.minimum(1.0, 1.6 * soft / max(soft.max(), 1e-6))
+            k = np.maximum(LINE_ALPHA * line, 0.12 * soft)
+            if mot is not None:
+                k = np.maximum(k, LINE_ALPHA_MOVING * line * mot)
+            k *= self.land
+        else:
+            # Christopher's WW2: no hard stroke, just a thin soft light line on the lighter bloc's side
+            # (Allies, Soviets), about 2 px at 1080p, crisp and bright on moving stretches
+            halo_side = np.isin(fac, [self.fac_code[f] for f in HALO_FACTIONS if f in self.fac_code])
+            thin = ndimage.gaussian_filter(ef, 2.2 * px)
+            thin /= max(thin.max(), 1e-6)
+            soft = ndimage.gaussian_filter(ef, 6.0 * px)
+            soft /= max(soft.max(), 1e-6)
+            k = (0.16 * np.minimum(1.0, 1.8 * thin) + 0.1 * np.minimum(1.0, 2.0 * soft)) * halo_side * self.land
+            if mot is not None:
+                crisp = np.minimum(1.0, ndimage.gaussian_filter(ef, 0.7 * px) * 2.2)
+                k = np.maximum(k, 0.8 * crisp * mot * self.land)
+        glow = np.array(LINE_COLOUR, np.float32) / 255
         out += (glow - out) * k[..., None]
         np.clip(out, 0, 1, out=out)
         return (out * 255).astype(np.uint8)

@@ -38,6 +38,10 @@ ADVANCE_STYLE = "smooth"            # Italian Mapper's WW1: rounded bulges (Chri
 NUMBER_FONT = "LiberationSans-Bold.ttf"  # Arial-style bold, as in his WW1 video
 NUMBER_SIZE = 13.5                  # px at 1280 wide: ~20 px at 1080p, the same for every army (measured)
 LABEL_SETBACK = 13.0                # px at 1280 wide: his numbers sit close to the front
+FRONT_LINE = "line"                 # a crisp light line on every active front, ~2 px at 1080p
+LINE_ALPHA = (0.62, 0.8)            # opacity on a still / moving front (measured on his frames)
+LINE_COLOUR = (250, 246, 238)
+PREVIEW_ALPHA = 0.0                 # no pale patch ahead of an advance (that is Christopher's WW2)
 LEGEND = [("CP", "Central Powers", None), ("CPC", "Central Powers client states", "1916-11-05"),
           ("ENT", "Allied Powers", None),
           ("SOV", "Soviet Russia", "1917-11-07"), ("OUT", "Signed an armistice / peace", "1918-05-07")]

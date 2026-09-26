@@ -95,3 +95,16 @@ it. Ours does the same (`PREVIEW_STEP`).
   off its own side's land, and it always stays on screen.
 - New "client state" faction (`CPC`) with a lighter tint: Kingdom of Poland (Nov 1916) and Ukraine (1918).
 - Steel-blue Entente colour.
+
+## Italian Mapper's WW1 map (measured on his frames, used by ww1/ with his template)
+- **Coastline and terrain come from his template.** The land outline is taken from the template itself,
+  so the country colours and the terrain texture line up exactly. The template has no lakes, but his video
+  does, so lakes are cut out of it. There's no drawn coastline and no dark rim: the sea stays flat right up
+  to the land.
+- **Every active front has a crisp light line**, about 2 px wide at 1080p, in near-white at ~60%
+  opacity. It's a little brighter where the front is moving, with a faint glow on both sides. There's no
+  line where a country that has left the war borders anyone.
+- **No pale patch ahead of an advance** (that's Christopher's WW2). Captured ground just changes colour
+  as the front sweeps over it.
+- **Rendered at 1440p and scaled down to 1080p.** This gives smoother fronts, coasts, railways and numbers
+  than rendering at 1080p directly.
