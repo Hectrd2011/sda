@@ -7,6 +7,7 @@ Usage:
 import argparse
 import json
 import math
+import zlib
 import os
 import subprocess
 import sys
@@ -238,7 +239,44 @@ class Renderer:
             return keys[0][1], day >= keys[0][0] - 0.5
         if day >= keys[-1][0]:
             return keys[-1][1], True
-        return fr["interp"](day), True
+        line = fr["interp"](day)
+        return line + self.spearheads(fr, day), True
+
+    SPEAR_FINGERS = (3, 6)   # thrusts per advancing stretch between two keyframes
+    SPEAR_WIDTH = 7.0        # finger half-width, in line points (of 500)
+    SPEAR_LEAD = 0.9         # how far ahead a thrust runs (fraction of the move, before the sin easing)
+    SPEAR_LAG = 0.35         # how far the rest of the front lags behind
+
+    def spearheads(self, fr, day):
+        """Offsets that turn an advance between two keyframes into rounded thrusts, like the reference:
+        a few narrow stretches run ahead and the rest lags, then everything meets the next keyframe
+        exactly. Only moving parts of the front are affected."""
+        keys = fr["keys"]
+        k = int(np.searchsorted([kk[0] for kk in keys], day, side="right")) - 1
+        if k < 0 or k >= len(keys) - 1:
+            return 0.0
+        (t0, K0), (t1, K1) = keys[k], keys[k + 1]
+        u = (day - t0) / max(t1 - t0, 1e-6)
+        D = K1 - K0
+        mag = np.linalg.norm(D, axis=1)
+        s = self.s
+        move = np.clip((mag - 6 * s) / (24 * s), 0.0, 1.0)  # static stretches stay put
+        if not move.any():
+            return 0.0
+        cache = fr.setdefault("_spear", {})
+        if k not in cache:
+            rng = np.random.default_rng(zlib.crc32(f"{fr['name']}:{k}".encode()))  # same in every worker
+            n = len(K0)
+            idx = np.arange(n)
+            b = np.full(n, -self.SPEAR_LAG)
+            moving = np.nonzero(move > 0.5)[0]
+            if len(moving):
+                for c in rng.choice(moving, size=min(len(moving), rng.integers(*self.SPEAR_FINGERS, endpoint=True)), replace=False):
+                    w = self.SPEAR_WIDTH * rng.uniform(0.7, 1.4)
+                    b += (self.SPEAR_LEAD + self.SPEAR_LAG) * rng.uniform(0.6, 1.0) * np.exp(-0.5 * ((idx - c) / w) ** 2)
+            cache[k] = np.clip(b, -0.8, 0.95)
+        b = cache[k]
+        return D * (b * move * math.sin(math.pi * u) / math.pi)[:, None]
 
     def poly_mask(self, poly, bbox):
         """Anti-aliased polygon coverage restricted to bbox (x0,y0,x1,y1) at 1x."""
@@ -335,30 +373,31 @@ class Renderer:
             fac[sl] = np.where(m > 0.5, self.fac_code[occ], fac[sl])
         return fac
 
-    # Newly taken ground is shown in a light tint that darkens into the occupier's colour.
-    RECENCY = [(0.4, 1.0), (0.9, 0.6), (1.6, 0.3)]  # a narrow, short-lived band behind the front
+    # Newly taken ground flashes a see-through warm cream and fades into its new colour over ~1.2 days,
+    # like the reference (measured there: a pale peak at capture, fully recoloured about 1 day later).
+    # Computed at full resolution so the fresh patch has the same crisp edges as the territory.
+    CAPTURE_FADE = 1.2  # days
+    CAPTURE_STEPS = (0.08, 0.3, 0.55, 0.85, 1.2)
+    CREAM = (0.94, 0.89, 0.82)
 
     def capture_light(self, day, lut_f):
-        lo = self.lo
-        base = lut_f[lo.ids]
-        now = lo.zone_codes(day, base)
+        base = lut_f[self.ids]
+        now = self.zone_codes(day, base)
         light = np.zeros(now.shape, np.float32)
-        for d, w in self.RECENCY:
-            past = lo.zone_codes(day - d, base)
+        # newest window last, so each pixel keeps the weight of the most recent change it saw
+        for d in sorted(self.CAPTURE_STEPS, reverse=True):
+            past = self.zone_codes(day - d, base)
             changed = (past != now) & (now > 0)
-            light = np.maximum(light, changed * np.float32(w))
+            w = np.float32(max(0.0, 1.0 - (d - self.CAPTURE_STEPS[0]) / self.CAPTURE_FADE))
+            light[changed] = w
         if not light.any():
             return None
         ys, xs = np.nonzero(light > 0.01)
-        if len(ys) == 0:
-            return None
-        # upscale only the part of the map that changed hands recently
-        fx, fy = self.W / lo.W, self.H / lo.H
-        lx0, ly0, lx1, ly1 = max(0, xs.min() - 2), max(0, ys.min() - 2), xs.max() + 3, ys.max() + 3
-        x0, y0 = int(lx0 * fx), int(ly0 * fy)
-        x1, y1 = min(self.W, int(lx1 * fx)), min(self.H, int(ly1 * fy))
-        crop = Image.fromarray(light[ly0:ly1, lx0:lx1]).resize((x1 - x0, y1 - y0), Image.BILINEAR)
-        return np.asarray(crop, np.float32) * self.land[y0:y1, x0:x1], (x0, y0, x1, y1)
+        x0, y0, x1, y1 = xs.min(), ys.min(), xs.max() + 1, ys.max() + 1
+        lt = light[y0:y1, x0:x1]
+        # soften only the very edge (anti-aliasing), keep the patch crisp
+        lt = ndimage.gaussian_filter(lt, 0.6 * self.s).astype(np.float32)
+        return lt * self.land[y0:y1, x0:x1], (x0, y0, x1, y1)
 
     def _static_overlay(self):
         """Railways then pink borders, folded into one multiply/add pair (computed once)."""
@@ -388,9 +427,9 @@ class Renderer:
             got = self.capture_light(day, lut_f)
             if got is not None:  # freshly captured land: whitish, fading into the occupier's colour
                 lt, (x0, y0, x1, y1) = got
-                k = (0.7 * lt)[..., None]  # a light version of the new owner's colour
+                k = (0.62 * lt)[..., None]  # see-through: the new owner's colour shows under the cream
                 sl = (slice(y0, y1), slice(x0, x1))
-                out[sl] = out[sl] * (1 - k) + np.float32(0.97) * k
+                out[sl] = out[sl] * (1 - k) + np.array(self.CREAM, np.float32) * k
         mul, add = self._static_overlay()
         out *= mul
         out += add
@@ -408,7 +447,7 @@ class Renderer:
             e = ndimage.binary_dilation(e)
         ys, xs = np.nonzero(e)
         k = np.float32(0.85) * self.land[ys, xs][:, None]
-        out[ys, xs] = out[ys, xs] * (1 - k) + np.float32(0.97) * k
+        out[ys, xs] = out[ys, xs] * (1 - k) + np.array((0.96, 0.93, 0.87), np.float32) * k  # cream front line
         np.clip(out, 0, 1, out=out)
         return (out * 255).astype(np.uint8)
 
