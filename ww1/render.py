@@ -33,6 +33,9 @@ MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", 
 END_DAY = T.day_index(T.END) + 11 / 24  # 11:00 on 11 November 1918
 
 
+LABEL_SETBACK = 42.0  # px at 1280 wide
+
+
 def ffmpeg_exe():
     try:
         import imageio_ffmpeg
@@ -107,7 +110,9 @@ class Renderer:
         self.border = base["border"]
         self.rail = base["rail"]
         self.key_of = {v: k for k, v in bm.KEY_ID.items()}
-        self.fac_code = {None: 0, "CP": 1, "ENT": 2, "SOV": 4, "OUT": 5}
+        # front-outline code per faction; client states share their bloc's code (no front line between them)
+        self.fac_code = {None: 0, "CP": 1, "ENT": 2, "SOV": 4, "OUT": 5, "CPC": 1}
+        self.pal_slot = {f: 200 + i for i, f in enumerate(T.FACTIONS)}
         self._victim_cache = {}
         self._mask_cache = {}
         self._prepare_fronts()
@@ -371,11 +376,11 @@ class Renderer:
         idx = self.ids.copy()
         pal_c, pal_a, pal_f = lut_c.copy(), lut_a.copy(), lut_f.copy()
         for occ, (c, al) in T.FACTIONS.items():
-            k = 200 + self.fac_code[occ]
+            k = self.pal_slot[occ]
             pal_c[k], pal_a[k], pal_f[k] = np.array(c, np.float32) / 255, al, self.fac_code[occ]
         for m, occ, (x0, y0, x1, y1) in self.zones(day, set_line=True):
             sub = idx[y0:y1, x0:x1]
-            sub[m > 0.5] = 200 + self.fac_code[occ]
+            sub[m > 0.5] = self.pal_slot[occ]
         a = pal_a[idx][..., None]
         out = self.base + (pal_c[idx] - self.base) * a
         if self.lo is not None:
@@ -478,8 +483,8 @@ class Renderer:
         self._label_vis = vis
 
     def number_size(self, v):
-        # bigger armies get bigger numbers, like the reference video
-        return min(15.0, 9.5 + 4.5 * math.sqrt(v / 2_500_000)) * self.ls * self.s
+        # one size for every army, like Italian Mapper's videos
+        return 15.5 * self.ls * self.s
 
     def number_box(self, v, p, ang):
         """Rotated rectangle covered by a number (with a little breathing room)."""
@@ -508,8 +513,10 @@ class Renderer:
         for dd in offs:
             d = day + dd
             line, _ = self.front_line(fr, d)
-            hint = np.array([T.interp_series([(k, p[0]) for k, p in lab["hint"]], d),
-                             T.interp_series([(k, p[1]) for k, p in lab["hint"]], d)])
+            # a front's two numbers share one anchor, so they sit as a mirrored pair across the line
+            pair = fr["labels"] if len(fr["labels"]) == 2 else [lab]
+            hint = np.mean([[T.interp_series([(k, p[0]) for k, p in l["hint"]], d),
+                             T.interp_series([(k, p[1]) for k, p in l["hint"]], d)] for l in pair], axis=0)
             # soft anchor: blend every line point by closeness to the hint, so the anchor slides
             # continuously instead of hopping between segments of a jagged line
             d2 = ((line - hint) ** 2).sum(1)
@@ -533,15 +540,27 @@ class Renderer:
             front -= 180
         elif front < -90:
             front += 180
-        # Tilt the number toward the front's direction but never more than ~45 degrees, like the
-        # reference: steep fronts get a readable slanted number instead of vertical text.
-        ang = 45.0 * math.tanh(front / 45.0)
+        # Parallel to the front like the reference, easing off only for near-vertical fronts (max ~75 deg)
+        ang = 75.0 * math.tanh(front / 75.0)
         # push the number far enough from the line that its (less tilted) box does not cross it
         size = self.number_size(v)
         half_w = self.font("LiberationSans-Bold.ttf", size).getlength(f"{v:,}") / 2
         rel = math.radians(front - ang)
         clear = half_w * abs(math.sin(rel)) + 0.6 * size * abs(math.cos(rel))
-        off = max(fr["label_off"] * self.s * self.ls, clear + 4 * self.s * self.ls)
+        # set well back from the line (about 3-4% of the screen width), as a mirrored pair across the front
+        off = max(fr["label_off"] * self.s * self.ls, LABEL_SETBACK * self.s * self.ls, clear + 4 * self.s * self.ls)
+        # where the front bends toward the number (salients, coasts), slide it further back until no
+        # part of the text comes near the line; distances change smoothly, so the number glides
+        from shapely.geometry import LineString, Point
+        line_now = LineString(self.front_line(fr, day)[0])
+        u = np.array([math.cos(math.radians(ang)), -math.sin(math.radians(ang))])
+        need = 0.6 * size + 3 * self.s * self.ls
+        for _ in range(4):
+            pts = [base + n * off + u * t for t in np.linspace(-half_w, half_w, 11)]
+            dmin = min(line_now.distance(Point(*p)) for p in pts)
+            if dmin >= need:
+                break
+            off += (need - dmin) * 1.2
         return base + n * off, ang
 
     def draw_markers(self, img, day, vt):
@@ -790,7 +809,8 @@ def main():
         if not gaps:
             break
         todo = [(args.w, args.h, a, b, os.path.join(chunk_dir, f"chunk_{a:06d}_{b:06d}.mp4"), args.view)
-                for a, b in split_ranges(gaps, jobs)]
+                # short pieces, so a restarted container only loses a few minutes of work
+                for a, b in split_ranges(gaps, max(jobs, sum(b - a for a, b in gaps) // 450))]
         print(f"rendering {sum(t[3] - t[2] for t in todo)} frames in {len(todo)} pieces (attempt {attempt + 1})",
               flush=True)
         try:
