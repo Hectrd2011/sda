@@ -35,8 +35,10 @@ END_DAY = T.day_index(T.END) + 11 / 24  # 11:00 on 11 November 1918
 
 
 HALO_FACTIONS = ("ENT", "SOV")  # the front glow sits on these blocs' side
-LABEL_SETBACK = 58.0  # px at 1280 wide (about 4.5% of the screen width, like the reference)
-NUM_FONT = "OpenSans-Bold.ttf"  # the numbers' typeface in the reference videos
+# number style: taken from the timeline when it sets one (Italian Mapper's WW1), else Christopher's WW2
+LABEL_SETBACK = getattr(T, "LABEL_SETBACK", 58.0)   # px at 1280 wide
+NUM_FONT = getattr(T, "NUMBER_FONT", "OpenSans-Bold.ttf")
+NUM_SIZE = getattr(T, "NUMBER_SIZE", 20.0)            # px at 1280 wide
 
 
 def ffmpeg_exe():
@@ -114,6 +116,7 @@ class Renderer:
         self.land = base["land"]
         self.border = base["border"]
         self.rail = base["rail"]
+        self.shade = base["shade"] if "shade" in base else None  # terrain shading over the colours
         self.key_of = {v: k for k, v in bm.KEY_ID.items()}
         # front-outline code per faction; client states share their bloc's code (no front line between them)
         self.fac_code = {None: 0, "CP": 1, "ENT": 2, "SOV": 4, "OUT": 5, "CPC": 1}
@@ -243,7 +246,9 @@ class Renderer:
         if day >= keys[-1][0]:
             return keys[-1][1], True
         line = fr["interp"](day)
-        return line + self.spearheads(fr, day) + self.teeth(fr, day, line), True
+        if getattr(T, "ADVANCE_STYLE", "smooth") == "fingers":  # Christopher's jagged WW2 thrusts
+            return line + self.spearheads(fr, day) + self.teeth(fr, day, line), True
+        return line, True
 
     TEETH_MAX = 90.0      # px at 1280 wide: deepest finger on a fast-moving front
     TEETH_SPACING = 30.0  # px at 1280 wide between fingers
@@ -370,7 +375,8 @@ class Renderer:
                 if d < since:
                     prev = f2
             fade = min(1.0, max(0.0, (day - since) / 3.0))
-            neutral = (np.array(bm.NEUTRAL[0], np.float32) / 255, bm.NEUTRAL[1])  # cream wash over the texture
+            nc, na = getattr(T, "NEUTRAL", bm.NEUTRAL)
+            neutral = (np.array(nc, np.float32) / 255, na)  # cream wash over the texture
             ca = (np.array(T.FACTIONS[fac][0], np.float32) / 255, T.FACTIONS[fac][1]) if fac else neutral
             cp = (np.array(T.FACTIONS[prev][0], np.float32) / 255, T.FACTIONS[prev][1]) if prev else neutral
             lut_c[idx] = cp[0] * (1 - fade) + ca[0] * fade
@@ -532,6 +538,8 @@ class Renderer:
         out = self.base + (pal_c[idx] - self.base) * a
         if self.lo is not None:
             out = self.capture_layer(day, lut_f, out)
+        if self.shade is not None:
+            out *= self.shade[..., None]
         mul, add = self._static_overlay()
         out *= mul
         out += add
@@ -646,7 +654,7 @@ class Renderer:
 
     def number_size(self, v):
         # one size for every army, like Italian Mapper's videos
-        return 20.0 * self.ls * self.s
+        return NUM_SIZE * self.ls * self.s
 
     def number_box(self, v, p, ang):
         """Rotated rectangle covered by a number (with a little breathing room)."""

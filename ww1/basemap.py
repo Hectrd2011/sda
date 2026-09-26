@@ -65,6 +65,9 @@ BLUE_MARBLE = ("bm_200407.jpg",
 TEX_P = (24.0, 40.0, 79.0)
 TEX_Q = 2.27
 NEUTRAL = ((246, 241, 230), 0.77)
+SEA_MEAN = (217, 226, 238)
+SHADE_K = 0.45   # strength of the terrain shading over the colours
+RAIL_CATEGORIES = (1, 2)   # main and secondary lines (Italian Mapper shows a dense network)
 
 # 1914 polity name -> country key used by the timeline.
 NAME_KEYS = {
@@ -359,11 +362,29 @@ def build(W=1280, H=720, view="europe"):
     urban_a = ndimage.gaussian_filter(urban_a, 0.6 * W / 1920) * land_a
     tex = tex * (1 - 0.55 * urban_a[..., None]) + np.array([70, 62, 55], np.float32) * 0.55 * urban_a[..., None]
     landc = tex / 255.0
+    # terrain shading applied over the (near-solid) colours, as in Italian Mapper's WW1
+    sr = np.asarray(Image.open(os.path.join(DL, "SR_50M", "SR_50M.tif")), np.float32)
+    col = ((lon + 179.98333) % 360.0) / 0.0333333
+    row = (89.98333 - lat) / 0.0333333
+    relief = ndimage.map_coordinates(sr, [row, col], order=1) / 255.0
+    del sr
+    shade = np.clip(1.0 + SHADE_K * (relief - np.median(relief[land_a > 0.5])), 0.8, 1.06)
+    shade = (shade * land_a + (1 - land_a)).astype(np.float32)
 
-    water_rgb = np.array([219, 230, 242], np.float32) / 255.0  # as in the reference
-    yy, xx = np.mgrid[0:H, 0:W]
-    hatch = ((xx + yy) % 6 < 1).astype(np.float32) * 0.025
-    waterc = water_rgb[None, None, :] - hatch[..., None]
+    # sea as in the reference: pale blue with fine diagonal hatching running top-left to bottom-right
+    # (measured on the 4K reference: 6.5 px spacing at 4K, lines at ~39 deg, 1080p mean (217,226,238), L std ~9.6)
+    sp = 6.5 * W / 3840.0
+    ss = 2 if W < 3000 else 1
+    ang = np.radians(39.0)
+    g = np.zeros((H, W), np.float32)
+    for y0 in range(0, H, 256):           # in strips, to keep memory low at 4K
+        y1 = min(H, y0 + 256)
+        yy, xx = np.mgrid[y0 * ss:y1 * ss, 0:W * ss].astype(np.float32) / ss
+        u = -xx * np.sin(ang) + yy * np.cos(ang)
+        gg = ((1 + np.cos(2 * np.pi * u / sp)) / 2) ** 3
+        g[y0:y1] = gg.reshape(y1 - y0, ss, W, ss).mean((1, 3))
+    g = (g - g.mean()) / (g.std() + 1e-6)
+    waterc = (np.array(SEA_MEAN, np.float32)[None, None, :] - 9.6 * g[..., None]) / 255.0
 
     base = waterc * (1 - land_a[..., None]) + landc * land_a[..., None]
 
@@ -401,7 +422,7 @@ def build(W=1280, H=720, view="europe"):
     rails = []
     sf = shapefile.Reader(os.path.join(DL, "ne_10m_railroads", "ne_10m_railroads.shp"))
     for sr in sf.iterShapeRecords():
-        if sr.record["category"] not in (1,):
+        if sr.record["category"] not in RAIL_CATEGORIES:
             continue
         s = sr.shape
         parts = list(s.parts) + [len(s.points)]
@@ -417,7 +438,7 @@ def build(W=1280, H=720, view="europe"):
     base = base * (1 - 0.55 * coast_a[..., None]) + coast_rgb * 0.55 * coast_a[..., None]
 
     res = dict(base=base.astype(np.float32), ids=ids.astype(np.uint8), land=land_a.astype(np.float32),
-               border=border_a.astype(np.float32), rail=rail_a.astype(np.float32))
+               border=border_a.astype(np.float32), rail=rail_a.astype(np.float32), shade=shade)
     np.savez_compressed(out, **res)
     return res
 

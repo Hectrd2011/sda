@@ -21,14 +21,19 @@ END = D("1918-11-11")
 
 # faction -> RGB, overlay alpha
 FACTIONS = {
-    # overlay colour and opacity over the satellite texture, fitted to Christopher's WW2 map (13 regions,
-    # mean error 1.5 levels): Axis -> Central Powers, Western Allies -> Entente, USSR -> Soviet Russia
-    "CP": ((103, 71, 74), 0.45),     # Central Powers: dark film, green terrain shows through
-    "CPC": ((222, 222, 212), 0.5),   # Central Powers client states (lighter)
-    "ENT": ((74, 125, 248), 0.56),   # Entente / Allies
-    "SOV": ((210, 120, 97), 0.73),   # Soviet Russia (from the October Revolution)
-    "OUT": ((236, 232, 222), 0.66),  # signed an armistice
+    # Italian Mapper's "World War I Every Day with Army Sizes": near-solid colours over a faint terrain
+    # texture, fitted to his frames (12 regions, mean error 0.9 levels)
+    "CP": ((102, 103, 83), 0.96),    # Central Powers (olive)
+    "CPC": ((140, 146, 123), 0.95),  # Central Powers client states (lighter olive-grey)
+    "ENT": ((97, 129, 172), 0.97),   # Entente / Allies (steel blue)
+    "SOV": ((165, 109, 86), 0.95),   # Soviet Russia (terracotta)
+    "OUT": ((229, 219, 206), 0.94),  # signed an armistice (back to neutral)
 }
+NEUTRAL = ((229, 219, 206), 0.94)   # neutral countries: warm cream
+ADVANCE_STYLE = "smooth"            # Italian Mapper's WW1: rounded bulges (Christopher's WW2: "fingers")
+NUMBER_FONT = "LiberationSans-Bold.ttf"  # Arial-style bold, as in his WW1 video
+NUMBER_SIZE = 13.0                  # px at 1280 wide (19.5 px at 1080p), measured from his "91.645"
+LABEL_SETBACK = 13.0                # px at 1280 wide: his numbers sit close to the front
 LEGEND = [("CP", "Central Powers", None), ("CPC", "Central Powers client states", "1916-11-05"),
           ("ENT", "Allied Powers", None),
           ("SOV", "Soviet Russia", "1917-11-07"), ("OUT", "Signed an armistice / peace", "1918-05-07")]
